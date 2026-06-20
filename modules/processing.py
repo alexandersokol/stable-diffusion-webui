@@ -816,6 +816,35 @@ def create_infotext(p, all_prompts, all_seeds, all_subseeds, comments=None, iter
     return f"{prompt_text}{negative_prompt_text}\n{generation_params_text}".strip()
 
 
+def create_history_infotext(p):
+    if p.prompt_for_display is None:
+        return Processed(p, []).infotext(p, 0)
+
+    prompt_for_display = p.prompt_for_display if not isinstance(p.prompt_for_display, list) else p.prompt_for_display[0]
+    negative_prompt = p.main_negative_prompt or p.negative_prompt
+    negative_prompt = negative_prompt if not isinstance(negative_prompt, list) else negative_prompt[0]
+
+    return create_infotext(
+        p,
+        [prompt_for_display],
+        p.all_seeds,
+        p.all_subseeds,
+        all_negative_prompts=[negative_prompt],
+    )
+
+
+def should_save_prompt_history(p):
+    id_task = getattr(p, "force_task_id", None)
+
+    return (
+        not cmd_opts.no_prompt_history
+        and not p.is_api
+        and isinstance(id_task, str)
+        and id_task.startswith("task(")
+        and not getattr(p, "txt2img_upscale", False)
+    )
+
+
 def process_images(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.before_process(p)
@@ -971,10 +1000,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             # infotext could be modified by that callback
             # Example: a wildcard processed by process_batch sets an extra model
             # strength, which is saved as "Model Strength: 1.0" in the infotext
-            if n == 0 and not cmd_opts.no_prompt_history:
+            if n == 0 and should_save_prompt_history(p):
                 with open(os.path.join(paths.data_path, "params.txt"), "w", encoding="utf8") as file:
-                    processed = Processed(p, [])
-                    file.write(processed.infotext(p, 0))
+                    file.write(create_history_infotext(p))
 
             for comment in model_hijack.comments:
                 p.comment(comment)

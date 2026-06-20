@@ -214,6 +214,7 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
         override_settings=override_settings,
     )
 
+    p.force_task_id = id_task
     p.scripts = modules.scripts.scripts_img2img
     p.script_args = args
 

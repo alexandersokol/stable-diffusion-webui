@@ -483,7 +483,14 @@ def connect_paste(button, paste_fields, input_comp, override_settings_component,
             except OSError:
                 pass
 
-        params = parse_generation_parameters(prompt)
+        skip_fields = list(shared.opts.infotext_skip_pasting) + [
+            "Seed",
+            "Variation seed",
+            "Variation seed strength",
+            "Seed resize from-1",
+            "Seed resize from-2",
+        ]
+        params = parse_generation_parameters(prompt, skip_fields=skip_fields)
         script_callbacks.infotext_pasted_callback(prompt, params)
         res = []
 
