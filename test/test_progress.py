@@ -11,8 +11,7 @@ from modules.shared_state import State
 def reset_progress_state():
     if shared.state is None:
         shared.state = State()
-    if progress.opts is None:
-        progress.opts = SimpleNamespace(live_previews_enable=False, live_previews_image_format="png", live_preview_max_size=1024)
+    progress.opts = SimpleNamespace(live_previews_enable=False, live_previews_image_format="png", live_preview_max_size=1024, progress_restore_image_max_size=1024)
 
     with progress.progress_lock:
         progress.current_task = None
@@ -62,6 +61,22 @@ def test_record_results_keeps_only_limit():
             ("task(txt2img-BBBBBBB)", "second"),
             ("task(txt2img-CCCCCCC)", "third"),
         ]
+
+
+def test_record_results_stores_lightweight_gallery_snapshot():
+    reset_progress_state()
+    image = Image.new("RGB", (2048, 1024), "red")
+    result = ([image], "generation_info", "html_info", "html_log")
+
+    progress.record_results("task(txt2img-AAAAAAA)", result)
+
+    with progress.progress_lock:
+        recorded = progress.recorded_results[0][1]
+
+    assert recorded is not result
+    assert recorded[0][0] is not image
+    assert recorded[0][0].size == (1024, 512)
+    assert recorded[1:] == result[1:]
 
 
 def test_restore_progress_waits_until_task_finishes():

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from modules.shared import opts
 
 import modules.shared as shared
+from modules import progress_results
 from collections import OrderedDict
 import string
 import random
@@ -63,8 +64,11 @@ def create_task_id(task_type):
     return f"task({task_type}-{res})"
 
 def record_results(id_task, res):
+    max_image_size = getattr(opts, "progress_restore_image_max_size", 1024)
+    recorded_result = progress_results.create_lightweight_recorded_result(res, max_image_size=max_image_size)
+
     with progress_lock:
-        recorded_results.append((id_task, res))
+        recorded_results.append((id_task, recorded_result))
         if len(recorded_results) > recorded_results_limit:
             recorded_results.pop(0)
 
