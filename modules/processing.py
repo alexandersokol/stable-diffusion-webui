@@ -16,7 +16,7 @@ from skimage import exposure
 from typing import Any
 
 import modules.sd_hijack
-from modules import devices, prompt_parser, masking, sd_samplers, lowvram, infotext_utils, extra_networks, sd_vae_approx, scripts, sd_samplers_common, sd_unet, errors, rng, profiling
+from modules import devices, prompt_parser, masking, sd_samplers, lowvram, infotext_utils, extra_networks, sd_vae_approx, scripts, sd_samplers_common, sd_unet, errors, rng, profiling, processing_output
 from modules.rng import slerp # noqa: F401
 from modules.sd_hijack import model_hijack
 from modules.sd_samplers_common import images_tensor_to_samples, decode_first_stage, approximation_indexes
@@ -945,6 +945,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     infotexts = []
     output_images = []
+    output_image_paths = []
     with torch.no_grad(), p.sd_model.ema_scope():
         with devices.autocast():
             p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
@@ -1109,29 +1110,35 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     p.scripts.postprocess_image_after_composite(p, pp)
                     image = pp.image
 
+                saved_image_path = None
                 if save_samples:
-                    images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    saved_image_path, _ = images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
 
                 text = infotext(i)
                 infotexts.append(text)
                 if opts.enable_pnginfo:
                     image.info["parameters"] = text
                 output_images.append(image)
+                output_image_paths.append(saved_image_path)
 
                 if mask_for_overlay is not None:
                     if opts.return_mask or opts.save_mask:
                         image_mask = mask_for_overlay.convert('RGB')
+                        saved_mask_path = None
                         if save_samples and opts.save_mask:
-                            images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+                            saved_mask_path, _ = images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
                         if opts.return_mask:
                             output_images.append(image_mask)
+                            output_image_paths.append(saved_mask_path)
 
                     if opts.return_mask_composite or opts.save_mask_composite:
                         image_mask_composite = Image.composite(original_denoised_image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
+                        saved_mask_composite_path = None
                         if save_samples and opts.save_mask_composite:
-                            images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+                            saved_mask_composite_path, _ = images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
                         if opts.return_mask_composite:
                             output_images.append(image_mask_composite)
+                            output_image_paths.append(saved_mask_composite_path)
 
             del x_samples_ddim
 
@@ -1153,9 +1160,12 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if opts.enable_pnginfo:
                     grid.info["parameters"] = text
                 output_images.insert(0, grid)
+                output_image_paths.insert(0, None)
                 index_of_first_image = 1
             if opts.grid_save:
-                images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                saved_grid_path, _ = images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                if opts.return_grid:
+                    output_image_paths[0] = saved_grid_path
 
     if not p.disable_extra_networks and p.extra_network_data:
         extra_networks.deactivate(p, p.extra_network_data)
@@ -1174,6 +1184,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     if p.scripts is not None:
         p.scripts.postprocess(p, res)
+
+    processing_output.replace_saved_images_with_placeholders(p, res, output_image_paths)
 
     return res
 
