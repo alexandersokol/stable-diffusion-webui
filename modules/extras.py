@@ -7,7 +7,7 @@ import json
 import torch
 import tqdm
 
-from modules import shared, images, sd_models, sd_vae, sd_models_config, errors
+from modules import shared, images, sd_models, sd_vae, sd_models_config, errors, model_merger_safety
 from modules.ui_common import plaintext_to_html
 import gradio as gr
 import safetensors.torch
@@ -143,6 +143,24 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
         return fail(f"Failed: Interpolation method ({interp_method}) requires a tertiary model.")
 
     tertiary_model_info = sd_models.checkpoints_list[tertiary_model_name] if theta_func1 else None
+    bake_in_vae_filename = sd_vae.vae_dict.get(bake_in_vae, None)
+    ckpt_dir = shared.cmd_opts.ckpt_dir or sd_models.model_path
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    try:
+        required_ram = model_merger_safety.estimate_merge_memory_required(
+            primary_model_info.filename,
+            secondary_model_info.filename if secondary_model_info else None,
+            tertiary_model_info.filename if tertiary_model_info else None,
+            bake_in_vae_filename,
+        )
+        model_merger_safety.check_available_ram(required_ram)
+        model_merger_safety.check_disk_space(
+            os.path.join(ckpt_dir, "model-merger-preflight.tmp"),
+            model_merger_safety.existing_file_size(primary_model_info.filename),
+        )
+    except (MemoryError, OSError) as e:
+        return fail(f"Failed: {e}")
 
     result_is_inpainting_model = False
     result_is_instruct_pix2pix_model = False
@@ -218,7 +236,6 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
 
     del theta_1
 
-    bake_in_vae_filename = sd_vae.vae_dict.get(bake_in_vae, None)
     if bake_in_vae_filename is not None:
         print(f"Baking in VAE from {bake_in_vae_filename}")
         shared.state.textinfo = 'Baking in VAE'
@@ -240,8 +257,6 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
         for key in list(theta_0):
             if re.search(regex, key):
                 theta_0.pop(key, None)
-
-    ckpt_dir = shared.cmd_opts.ckpt_dir or sd_models.model_path
 
     filename = filename_generator() if custom_name == '' else custom_name
     filename += ".inpainting" if result_is_inpainting_model else ""
@@ -311,10 +326,23 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
         metadata["sd_merge_models"] = json.dumps(sd_merge_models)
 
     _, extension = os.path.splitext(output_modelname)
-    if extension.lower() == ".safetensors":
-        safetensors.torch.save_file(theta_0, output_modelname, metadata=metadata if len(metadata)>0 else None)
-    else:
-        torch.save(theta_0, output_modelname)
+    try:
+        required_disk = max(
+            model_merger_safety.existing_file_size(primary_model_info.filename),
+            model_merger_safety.estimate_state_dict_size(theta_0),
+        )
+        model_merger_safety.check_disk_space(output_modelname, required_disk)
+
+        def save_checkpoint(temp_output_modelname):
+            if extension.lower() == ".safetensors":
+                safetensors.torch.save_file(theta_0, temp_output_modelname, metadata=metadata if len(metadata)>0 else None)
+            else:
+                torch.save(theta_0, temp_output_modelname)
+
+        model_merger_safety.atomic_write(output_modelname, save_checkpoint)
+    except Exception as e:
+        errors.display(e, "saving merged checkpoint")
+        return fail(f"Failed saving checkpoint: {e}")
 
     sd_models.list_models()
     created_model = next((ckpt for ckpt in sd_models.checkpoints_list.values() if ckpt.name == filename), None)
