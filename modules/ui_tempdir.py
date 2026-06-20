@@ -1,5 +1,7 @@
 import os
+import json
 import tempfile
+import time
 from collections import namedtuple
 from pathlib import Path
 
@@ -11,6 +13,73 @@ from modules import shared
 
 
 Savedfile = namedtuple("Savedfile", ["name"])
+
+WEBUI_TEMP_FILE_PREFIX = "sd-webui-"
+WEBUI_TEMP_MANIFEST = ".sd-webui-temp-files.json"
+WEBUI_TEMP_ORPHAN_TTL = 7 * 24 * 60 * 60
+
+
+def _manifest_path(temp_dir):
+    return os.path.join(temp_dir, WEBUI_TEMP_MANIFEST)
+
+
+def _is_relative_to(path, parent):
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _read_manifest(temp_dir):
+    filename = _manifest_path(temp_dir)
+    if not os.path.isfile(filename):
+        return set()
+
+    try:
+        with open(filename, "r", encoding="utf8") as file:
+            data = json.load(file)
+    except Exception:
+        return set()
+
+    if isinstance(data, list):
+        files = data
+    else:
+        files = data.get("files", [])
+
+    return {os.path.abspath(file) for file in files if isinstance(file, str)}
+
+
+def _write_manifest(temp_dir, filenames):
+    os.makedirs(temp_dir, exist_ok=True)
+    manifest = _manifest_path(temp_dir)
+    fd, temp_manifest = tempfile.mkstemp(prefix=f".{WEBUI_TEMP_MANIFEST}.", suffix=".tmp", dir=temp_dir)
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf8") as file:
+            json.dump({"version": 1, "files": sorted(filenames)}, file)
+
+        os.replace(temp_manifest, manifest)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.remove(temp_manifest)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def register_tmp_file_ownership(filename):
+    temp_dir = shared.opts.temp_dir
+    if temp_dir == "" or not _is_relative_to(filename, temp_dir):
+        return
+
+    filenames = _read_manifest(temp_dir)
+    filenames.add(os.path.abspath(filename))
+    _write_manifest(temp_dir, filenames)
 
 
 def register_tmp_file(gradio, filename):
@@ -51,8 +120,14 @@ def save_pil_to_file(self, pil_image, dir=None, format="png"):
             metadata.add_text(key, value)
             use_metadata = True
 
-    file_obj = tempfile.NamedTemporaryFile(delete=False, suffix=".png", dir=dir)
-    pil_image.save(file_obj, pnginfo=(metadata if use_metadata else None))
+    file_obj = tempfile.NamedTemporaryFile(delete=False, prefix=WEBUI_TEMP_FILE_PREFIX, suffix=".png", dir=dir)
+    try:
+        pil_image.save(file_obj, pnginfo=(metadata if use_metadata else None))
+    finally:
+        file_obj.close()
+
+    register_tmp_file_ownership(file_obj.name)
+    register_tmp_file(shared.demo, file_obj.name)
     return file_obj.name
 
 
@@ -75,14 +150,40 @@ def cleanup_tmpdr():
     if temp_dir == "" or not os.path.isdir(temp_dir):
         return
 
+    remaining_files = set()
+    tracked_files = _read_manifest(temp_dir)
+
+    for filename in tracked_files:
+        if not _is_relative_to(filename, temp_dir):
+            continue
+
+        if not os.path.exists(filename):
+            continue
+
+        try:
+            os.remove(filename)
+        except OSError:
+            remaining_files.add(filename)
+
+    now = time.time()
     for root, _, files in os.walk(temp_dir, topdown=False):
         for name in files:
-            _, extension = os.path.splitext(name)
-            if extension != ".png":
+            if not name.startswith(WEBUI_TEMP_FILE_PREFIX):
                 continue
 
             filename = os.path.join(root, name)
-            os.remove(filename)
+            if os.path.abspath(filename) in tracked_files:
+                continue
+
+            try:
+                if now - os.path.getmtime(filename) < WEBUI_TEMP_ORPHAN_TTL:
+                    continue
+
+                os.remove(filename)
+            except OSError:
+                pass
+
+    _write_manifest(temp_dir, remaining_files)
 
 
 def is_gradio_temp_path(path):

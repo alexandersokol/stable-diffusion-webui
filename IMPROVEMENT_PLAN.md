@@ -8,7 +8,7 @@ This document tracks resource, performance, and reliability improvements for thi
 | --- | --- | --- | --- |
 | 1 | Image filename collision overwrite | `modules/images.py` searches only 500 numbered filenames before saving; if all candidates already exist, the last candidate can still be used and replaced. Add an explicit failure or continue searching safely to prevent accidental image loss. | done |
 | 2 | Model merger OOM and partial output risk | `modules/extras.py` can load two or three full checkpoints plus optional VAE tensors into RAM and saves directly to the target model path. Add memory/disk preflight checks and atomic output writing so failed merges do not leave corrupt checkpoints. | done |
-| 3 | Unsafe temp cleanup policy | `modules/ui_tempdir.py` deletes every `.png` under a configured temp directory at startup and ignores non-PNG temp files. Track WebUI-owned files and use TTL/ownership-based cleanup to avoid both storage leaks and accidental deletion of unrelated PNGs. | backlog |
+| 3 | Unsafe temp cleanup policy | `modules/ui_tempdir.py` deletes every `.png` under a configured temp directory at startup and ignores non-PNG temp files. Track WebUI-owned files and use TTL/ownership-based cleanup to avoid both storage leaks and accidental deletion of unrelated PNGs. | done |
 | 4 | Progress state lacks synchronization | `modules/progress.py` stores `current_task`, queues, finished tasks, and recorded results in module globals without locks. Add thread-safe access because UI/API polling and queued generation can run concurrently and leave stale or inconsistent status. | backlog |
 
 ## High
