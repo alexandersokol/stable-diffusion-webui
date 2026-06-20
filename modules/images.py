@@ -20,6 +20,7 @@ import json
 import hashlib
 
 from modules import sd_samplers, shared, script_callbacks, errors
+from modules.image_filename import get_next_available_filename
 from modules.paths_internal import roboto_ttf_file
 from modules.shared import opts
 
@@ -687,12 +688,7 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
 
         if add_number:
             basecount = get_next_sequence_number(path, basename)
-            fullfn = None
-            for i in range(500):
-                fn = f"{basecount + i:05}" if basename == '' else f"{basename}-{basecount + i:04}"
-                fullfn = os.path.join(path, f"{fn}{file_decoration}.{extension}")
-                if not os.path.exists(fullfn):
-                    break
+            fullfn = get_next_available_filename(path, basename, file_decoration, extension, basecount)
         else:
             fullfn = os.path.join(path, f"{file_decoration}.{extension}")
     else:
