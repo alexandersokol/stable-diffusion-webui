@@ -107,6 +107,12 @@ class State:
 
         return obj
 
+    def clear_current_preview(self):
+        self.current_latent = None
+        self.current_image = None
+        self.current_image_sampling_step = 0
+        self.id_live_preview = 0
+
     def begin(self, job: str = "(unknown)"):
         self.sampling_step = 0
         self.time_start = time.time()
@@ -114,10 +120,7 @@ class State:
         self.processing_has_refined_job_count = False
         self.job_no = 0
         self.job_timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        self.current_latent = None
-        self.current_image = None
-        self.current_image_sampling_step = 0
-        self.id_live_preview = 0
+        self.clear_current_preview()
         self.skipped = False
         self.interrupted = False
         self.stopping_generation = False
@@ -131,6 +134,7 @@ class State:
         log.info("Ending job %s (%.2f seconds)", self.job, duration)
         self.job = ""
         self.job_count = 0
+        self.clear_current_preview()
 
         devices.torch_gc()
 
