@@ -4,6 +4,7 @@ import threading
 import time
 
 import gradio as gr
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from modules.shared import opts
@@ -20,11 +21,18 @@ finished_tasks = []
 recorded_results = []
 recorded_results_limit = 2
 progress_lock = threading.RLock()
+live_preview_cache = OrderedDict()
+live_preview_cache_limit = 8
 
 
 def get_current_task():
     with progress_lock:
         return current_task
+
+
+def clear_live_preview_cache():
+    with progress_lock:
+        live_preview_cache.clear()
 
 
 def start_task(id_task):
@@ -33,6 +41,7 @@ def start_task(id_task):
     with progress_lock:
         current_task = id_task
         pending_tasks.pop(id_task, None)
+        live_preview_cache.clear()
 
 
 def finish_task(id_task):
@@ -45,6 +54,7 @@ def finish_task(id_task):
         finished_tasks.append(id_task)
         if len(finished_tasks) > 16:
             finished_tasks.pop(0)
+        live_preview_cache.clear()
 
 def create_task_id(task_type):
     N = 7
@@ -109,6 +119,56 @@ def get_task_type(id_task: Optional[str]):
     return task_type if task_type in {"txt2img", "img2img", "extras"} else None
 
 
+def _resize_live_preview_image(image, max_size):
+    if not max_size or max_size <= 0:
+        return image
+
+    width, height = image.size
+    largest_side = max(width, height)
+    if largest_side <= max_size:
+        return image
+
+    scale = max_size / largest_side
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    resampling_filter = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    return image.resize(new_size, resampling_filter)
+
+
+def _encode_live_preview(image, id_live_preview):
+    image_format = opts.live_previews_image_format
+    max_size = getattr(opts, "live_preview_max_size", 1024)
+    cache_key = (shared.state.job_timestamp, id_live_preview, image_format, max_size)
+
+    with progress_lock:
+        cached_preview = live_preview_cache.get(cache_key)
+        if cached_preview is not None:
+            live_preview_cache.move_to_end(cache_key)
+            return cached_preview
+
+    image = _resize_live_preview_image(image, max_size)
+    buffered = io.BytesIO()
+
+    if image_format == "png":
+        # using optimize for large images takes an enormous amount of time
+        if max(*image.size) <= 256:
+            save_kwargs = {"optimize": True}
+        else:
+            save_kwargs = {"optimize": False, "compress_level": 1}
+    else:
+        save_kwargs = {}
+
+    image.save(buffered, format=image_format, **save_kwargs)
+    base64_image = base64.b64encode(buffered.getvalue()).decode('ascii')
+    live_preview = f"data:image/{image_format};base64,{base64_image}"
+
+    with progress_lock:
+        live_preview_cache[cache_key] = live_preview
+        if len(live_preview_cache) > live_preview_cache_limit:
+            live_preview_cache.popitem(last=False)
+
+    return live_preview
+
+
 def progressapi(req: ProgressRequest):
     with progress_lock:
         current_task_snapshot = current_task
@@ -154,21 +214,7 @@ def progressapi(req: ProgressRequest):
         if shared.state.id_live_preview != req.id_live_preview:
             image = shared.state.current_image
             if image is not None:
-                buffered = io.BytesIO()
-
-                if opts.live_previews_image_format == "png":
-                    # using optimize for large images takes an enormous amount of time
-                    if max(*image.size) <= 256:
-                        save_kwargs = {"optimize": True}
-                    else:
-                        save_kwargs = {"optimize": False, "compress_level": 1}
-
-                else:
-                    save_kwargs = {}
-
-                image.save(buffered, format=opts.live_previews_image_format, **save_kwargs)
-                base64_image = base64.b64encode(buffered.getvalue()).decode('ascii')
-                live_preview = f"data:image/{opts.live_previews_image_format};base64,{base64_image}"
+                live_preview = _encode_live_preview(image, shared.state.id_live_preview)
                 id_live_preview = shared.state.id_live_preview
 
     return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)

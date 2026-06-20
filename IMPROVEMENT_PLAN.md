@@ -15,7 +15,7 @@ This document tracks resource, performance, and reliability improvements for thi
 
 | Id | name | description | status |
 | --- | --- | --- | --- |
-| 5 | Live preview resource pressure | `modules/progress.py`, `modules/shared_state.py`, and `javascript/progressbar.js` repeatedly decode, grid, encode, base64, and transmit previews. Add size caps, adaptive refresh, browser visibility throttling, and server-side preview reuse. | backlog |
+| 5 | Live preview resource pressure | `modules/progress.py`, `modules/shared_state.py`, and `javascript/progressbar.js` repeatedly decode, grid, encode, base64, and transmit previews. Add size caps, adaptive refresh, browser visibility throttling, and server-side preview reuse. | done |
 | 6 | Current preview retained after job end | `State.end()` does not clear `current_latent` or `current_image`, so large preview images can remain in RAM after generation until the next job begins. Clear preview tensors/images when no restore path needs them. | backlog |
 | 7 | Large batches retained in memory | `modules/processing.py` keeps all output PIL images, optional grids, masks, and infotexts in memory until the response is returned. Add streaming/limited gallery return modes or spill large batches to temp files. | backlog |
 | 8 | Upscale cache holds large images | `scripts/postprocessing_upscale.py` hashes full image pixels and stores full PIL results in `upscale_cache` with only an item-count limit. Replace with byte-budgeted LRU cache and cheaper cache keys. | backlog |

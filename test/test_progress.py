@@ -2,6 +2,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from PIL import Image
+
 from modules import progress, shared
 from modules.shared_state import State
 
@@ -10,13 +12,14 @@ def reset_progress_state():
     if shared.state is None:
         shared.state = State()
     if progress.opts is None:
-        progress.opts = SimpleNamespace(live_previews_enable=False)
+        progress.opts = SimpleNamespace(live_previews_enable=False, live_previews_image_format="png", live_preview_max_size=1024)
 
     with progress.progress_lock:
         progress.current_task = None
         progress.pending_tasks.clear()
         progress.finished_tasks.clear()
         progress.recorded_results.clear()
+        progress.live_preview_cache.clear()
 
 
 def test_progress_task_lifecycle_is_visible_through_locked_snapshots():
@@ -79,3 +82,33 @@ def test_restore_progress_waits_until_task_finishes():
 
     assert progress.restore_progress(task_id) == result
     worker.join(timeout=1)
+
+
+def test_resize_live_preview_image_caps_largest_side():
+    image = Image.new("RGB", (2048, 1024))
+
+    resized = progress._resize_live_preview_image(image, 512)
+
+    assert resized.size == (512, 256)
+
+
+def test_encode_live_preview_reuses_cached_preview(monkeypatch):
+    reset_progress_state()
+    progress.opts = SimpleNamespace(live_previews_enable=True, live_previews_image_format="png", live_preview_max_size=64)
+    shared.state.job_timestamp = "20260621120000"
+    image = Image.new("RGB", (128, 64))
+    save_calls = []
+    original_save = Image.Image.save
+
+    def save_once(self, *args, **kwargs):
+        save_calls.append(self.size)
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", save_once)
+
+    first_preview = progress._encode_live_preview(image, 1)
+    second_preview = progress._encode_live_preview(image, 1)
+
+    assert first_preview == second_preview
+    assert len(save_calls) == 1
+    assert save_calls[0] == (64, 32)

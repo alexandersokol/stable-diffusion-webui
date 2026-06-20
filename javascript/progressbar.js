@@ -72,6 +72,13 @@ function randomId(taskType) {
 
 var activeProgressRequests = {};
 
+function progressRefreshPeriod(multiplier) {
+    var basePeriod = opts.live_preview_refresh_period || 500;
+    if (!document.hidden) return basePeriod;
+
+    return Math.max(basePeriod * multiplier, 2000);
+}
+
 // starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
 // preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
 // calls onProgress every time there is a progress update
@@ -193,14 +200,14 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
 
             setTimeout(() => {
                 funProgress(id_task, res.id_live_preview);
-            }, opts.live_preview_refresh_period || 500);
+            }, progressRefreshPeriod(4));
         }, function() {
             retryProgress();
         });
     };
 
     var funLivePreview = function(id_task, id_live_preview) {
-        request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview}, function(res) {
+        request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview, live_preview: !document.hidden}, function(res) {
             livePreviewErrors = 0;
 
             if (!divProgress) {
@@ -226,7 +233,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
 
             setTimeout(() => {
                 funLivePreview(id_task, res.id_live_preview);
-            }, opts.live_preview_refresh_period || 500);
+            }, progressRefreshPeriod(8));
         }, function() {
             if (!divProgress) return;
 
