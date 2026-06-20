@@ -11,7 +11,7 @@ import modules.shared as shared
 from collections import OrderedDict
 import string
 import random
-from typing import List
+from typing import List, Optional
 
 current_task = None
 pending_tasks = OrderedDict()
@@ -57,12 +57,14 @@ class PendingTasksResponse(BaseModel):
     tasks: List[str] = Field(title="Pending task ids")
 
 class ProgressRequest(BaseModel):
-    id_task: str = Field(default=None, title="Task ID", description="id of the task to get progress for")
+    id_task: Optional[str] = Field(default=None, title="Task ID", description="id of the task to get progress for")
     id_live_preview: int = Field(default=-1, title="Live preview image ID", description="id of last received last preview image")
     live_preview: bool = Field(default=True, title="Include live preview", description="boolean flag indicating whether to include the live preview image")
 
 
 class ProgressResponse(BaseModel):
+    id_task: Optional[str] = Field(default=None, title="Task ID")
+    task_type: Optional[str] = Field(default=None, title="Task type")
     active: bool = Field(title="Whether the task is being worked on right now")
     queued: bool = Field(title="Whether the task is in queue")
     completed: bool = Field(title="Whether the task has already finished")
@@ -84,18 +86,31 @@ def get_pending_tasks():
     return PendingTasksResponse(size=pending_len, tasks=pending_tasks_ids)
 
 
+def get_task_type(id_task: Optional[str]):
+    if not id_task or not id_task.startswith("task(") or not id_task.endswith(")"):
+        return None
+
+    task_name = id_task[5:-1]
+    task_type = task_name.split("-", 1)[0]
+
+    return task_type if task_type in {"txt2img", "img2img", "extras"} else None
+
+
 def progressapi(req: ProgressRequest):
-    active = req.id_task == current_task
-    queued = req.id_task in pending_tasks
-    completed = req.id_task in finished_tasks
+    id_task = req.id_task or current_task
+    task_type = get_task_type(id_task)
+
+    active = id_task == current_task
+    queued = id_task in pending_tasks
+    completed = id_task in finished_tasks
 
     if not active:
         textinfo = "Waiting..."
         if queued:
             sorted_queued = sorted(pending_tasks.keys(), key=lambda x: pending_tasks[x])
-            queue_index = sorted_queued.index(req.id_task)
+            queue_index = sorted_queued.index(id_task)
             textinfo = "In queue: {}/{}".format(queue_index + 1, len(sorted_queued))
-        return ProgressResponse(active=active, queued=queued, completed=completed, id_live_preview=-1, textinfo=textinfo)
+        return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, id_live_preview=-1, textinfo=textinfo)
 
     progress = 0
 
@@ -138,7 +153,7 @@ def progressapi(req: ProgressRequest):
                 live_preview = f"data:image/{opts.live_previews_image_format};base64,{base64_image}"
                 id_live_preview = shared.state.id_live_preview
 
-    return ProgressResponse(active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
+    return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
 
 
 def restore_progress(id_task):

@@ -150,7 +150,7 @@ function showRestoreProgressButton(tabname, show) {
 function submit() {
     showSubmitButtons('txt2img', false);
 
-    var id = randomId();
+    var id = randomId("txt2img");
     localSet("txt2img_task_id", id);
 
     requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
@@ -177,7 +177,7 @@ function submit_txt2img_upscale() {
 function submit_img2img() {
     showSubmitButtons('img2img', false);
 
-    var id = randomId();
+    var id = randomId("img2img");
     localSet("img2img_task_id", id);
 
     requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
@@ -197,7 +197,7 @@ function submit_img2img() {
 function submit_extras() {
     showSubmitButtons('extras', false);
 
-    var id = randomId();
+    var id = randomId("extras");
 
     requestProgress(id, gradioApp().getElementById('extras_gallery_container'), gradioApp().getElementById('extras_gallery'), function() {
         showSubmitButtons('extras', true);
@@ -211,33 +211,51 @@ function submit_extras() {
     return res;
 }
 
+function attachProgress(tabname, id) {
+    if (!id) return;
+
+    localSet(tabname + "_task_id", id);
+    showRestoreProgressButton(tabname, false);
+    showSubmitButtons(tabname, false);
+
+    requestProgress(id, gradioApp().getElementById(tabname + '_gallery_container'), gradioApp().getElementById(tabname + '_gallery'), function() {
+        showSubmitButtons(tabname, true);
+        localRemove(tabname + "_task_id");
+        showRestoreProgressButton(tabname, false);
+    }, null, 0);
+}
+
 function restoreProgressTxt2img() {
-    showRestoreProgressButton("txt2img", false);
     var id = localGet("txt2img_task_id");
 
-    if (id) {
-        showSubmitInterruptingPlaceholder('txt2img');
-        requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-            showSubmitButtons('txt2img', true);
-        }, null, 0);
-    }
+    attachProgress("txt2img", id);
 
     return id;
 }
 
 function restoreProgressImg2img() {
-    showRestoreProgressButton("img2img", false);
-
     var id = localGet("img2img_task_id");
 
-    if (id) {
-        showSubmitInterruptingPlaceholder('img2img');
-        requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-            showSubmitButtons('img2img', true);
-        }, null, 0);
-    }
+    attachProgress("img2img", id);
 
     return id;
+}
+
+function restoreStoredProgress(tabname) {
+    var id = localGet(tabname + "_task_id");
+
+    if (!id) return false;
+
+    attachProgress(tabname, id);
+    return true;
+}
+
+function attachCurrentServerProgress() {
+    request("./internal/progress", {id_task: null, live_preview: false}, function(res) {
+        if (!res.active || !res.id_task || !["txt2img", "img2img"].includes(res.task_type)) return;
+
+        attachProgress(res.task_type, res.id_task);
+    }, function() {});
 }
 
 
@@ -264,15 +282,16 @@ function setupResolutionPasting(tabname) {
 }
 
 onUiLoaded(function() {
-    showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
-    showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+    restoreStoredProgress('txt2img');
+    restoreStoredProgress('img2img');
+    attachCurrentServerProgress();
     setupResolutionPasting('txt2img');
     setupResolutionPasting('img2img');
 });
 
 
 function modelmerger() {
-    var id = randomId();
+    var id = randomId("modelmerger");
     requestProgress(id, gradioApp().getElementById('modelmerger_results_panel'), null, function() {});
 
     var res = create_submit_args(arguments);

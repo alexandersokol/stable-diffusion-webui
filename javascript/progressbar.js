@@ -20,10 +20,10 @@ function request(url, data, handler, errorHandler) {
                     handler(js);
                 } catch (error) {
                     console.error(error);
-                    errorHandler();
+                    if (errorHandler) errorHandler();
                 }
             } else {
-                errorHandler();
+                if (errorHandler) errorHandler();
             }
         }
     };
@@ -65,18 +65,27 @@ function setTitle(progress) {
 }
 
 
-function randomId() {
-    return "task(" + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + ")";
+function randomId(taskType) {
+    var prefix = taskType ? taskType + "-" : "";
+    return "task(" + prefix + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + ")";
 }
+
+var activeProgressRequests = {};
 
 // starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
 // preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
 // calls onProgress every time there is a progress update
 function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
+    if (!id_task || activeProgressRequests[id_task]) return;
+
+    activeProgressRequests[id_task] = true;
+
     var dateStart = new Date();
     var wasEverActive = false;
     var parentProgressbar = progressbarContainer.parentNode;
     var wakeLock = null;
+    var progressErrors = 0;
+    var livePreviewErrors = 0;
 
     var requestWakeLock = async function() {
         if (!opts.prevent_screen_sleep_during_generation || wakeLock) return;
@@ -113,6 +122,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
         if (!divProgress) return;
 
         setTitle("");
+        delete activeProgressRequests[id_task];
         parentProgressbar.removeChild(divProgress);
         if (gallery && livePreview) gallery.removeChild(livePreview);
         atEnd();
@@ -120,9 +130,23 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
         divProgress = null;
     };
 
+    var retryProgress = function() {
+        if (!divProgress) return;
+
+        progressErrors += 1;
+        divInner.style.background = "";
+        divInner.textContent = "Connection lost. Reconnecting...";
+
+        setTimeout(() => {
+            funProgress(id_task);
+        }, Math.min(1000 * progressErrors, 5000));
+    };
+
     var funProgress = function(id_task) {
         requestWakeLock();
         request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
+            progressErrors = 0;
+
             if (res.completed) {
                 removeProgressBar();
                 return;
@@ -171,12 +195,14 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 funProgress(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
-            removeProgressBar();
+            retryProgress();
         });
     };
 
     var funLivePreview = function(id_task, id_live_preview) {
         request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview}, function(res) {
+            livePreviewErrors = 0;
+
             if (!divProgress) {
                 return;
             }
@@ -202,7 +228,12 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 funLivePreview(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
-            removeProgressBar();
+            if (!divProgress) return;
+
+            livePreviewErrors += 1;
+            setTimeout(() => {
+                funLivePreview(id_task, id_live_preview);
+            }, Math.min(1000 * livePreviewErrors, 5000));
         });
     };
 
