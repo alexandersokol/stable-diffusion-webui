@@ -1,5 +1,6 @@
 import base64
 import io
+import threading
 import time
 
 import gradio as gr
@@ -18,24 +19,32 @@ pending_tasks = OrderedDict()
 finished_tasks = []
 recorded_results = []
 recorded_results_limit = 2
+progress_lock = threading.RLock()
+
+
+def get_current_task():
+    with progress_lock:
+        return current_task
 
 
 def start_task(id_task):
     global current_task
 
-    current_task = id_task
-    pending_tasks.pop(id_task, None)
+    with progress_lock:
+        current_task = id_task
+        pending_tasks.pop(id_task, None)
 
 
 def finish_task(id_task):
     global current_task
 
-    if current_task == id_task:
-        current_task = None
+    with progress_lock:
+        if current_task == id_task:
+            current_task = None
 
-    finished_tasks.append(id_task)
-    if len(finished_tasks) > 16:
-        finished_tasks.pop(0)
+        finished_tasks.append(id_task)
+        if len(finished_tasks) > 16:
+            finished_tasks.pop(0)
 
 def create_task_id(task_type):
     N = 7
@@ -44,13 +53,15 @@ def create_task_id(task_type):
     return f"task({task_type}-{res})"
 
 def record_results(id_task, res):
-    recorded_results.append((id_task, res))
-    if len(recorded_results) > recorded_results_limit:
-        recorded_results.pop(0)
+    with progress_lock:
+        recorded_results.append((id_task, res))
+        if len(recorded_results) > recorded_results_limit:
+            recorded_results.pop(0)
 
 
 def add_task_to_queue(id_job):
-    pending_tasks[id_job] = time.time()
+    with progress_lock:
+        pending_tasks[id_job] = time.time()
 
 class PendingTasksResponse(BaseModel):
     size: int = Field(title="Pending task size")
@@ -81,8 +92,10 @@ def setup_progress_api(app):
 
 
 def get_pending_tasks():
-    pending_tasks_ids = list(pending_tasks)
-    pending_len = len(pending_tasks_ids)
+    with progress_lock:
+        pending_tasks_ids = list(pending_tasks)
+        pending_len = len(pending_tasks_ids)
+
     return PendingTasksResponse(size=pending_len, tasks=pending_tasks_ids)
 
 
@@ -97,17 +110,22 @@ def get_task_type(id_task: Optional[str]):
 
 
 def progressapi(req: ProgressRequest):
-    id_task = req.id_task or current_task
+    with progress_lock:
+        current_task_snapshot = current_task
+        pending_tasks_snapshot = OrderedDict(pending_tasks)
+        finished_tasks_snapshot = set(finished_tasks)
+
+    id_task = req.id_task or current_task_snapshot
     task_type = get_task_type(id_task)
 
-    active = id_task == current_task
-    queued = id_task in pending_tasks
-    completed = id_task in finished_tasks
+    active = id_task == current_task_snapshot
+    queued = id_task in pending_tasks_snapshot
+    completed = id_task in finished_tasks_snapshot
 
     if not active:
         textinfo = "Waiting..."
         if queued:
-            sorted_queued = sorted(pending_tasks.keys(), key=lambda x: pending_tasks[x])
+            sorted_queued = sorted(pending_tasks_snapshot.keys(), key=lambda x: pending_tasks_snapshot[x])
             queue_index = sorted_queued.index(id_task)
             textinfo = "In queue: {}/{}".format(queue_index + 1, len(sorted_queued))
         return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, id_live_preview=-1, textinfo=textinfo)
@@ -157,10 +175,18 @@ def progressapi(req: ProgressRequest):
 
 
 def restore_progress(id_task):
-    while id_task == current_task or id_task in pending_tasks:
+    while True:
+        with progress_lock:
+            task_is_pending = id_task == current_task or id_task in pending_tasks
+
+        if not task_is_pending:
+            break
+
         time.sleep(0.1)
 
-    res = next(iter([x[1] for x in recorded_results if id_task == x[0]]), None)
+    with progress_lock:
+        res = next(iter([x[1] for x in recorded_results if id_task == x[0]]), None)
+
     if res is not None:
         return res
 
