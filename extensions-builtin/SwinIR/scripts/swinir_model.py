@@ -4,7 +4,7 @@ import sys
 import torch
 from PIL import Image
 
-from modules import devices, modelloader, script_callbacks, shared, upscaler_utils
+from modules import devices, modelloader, script_callbacks, shared, upscaler_model_cache, upscaler_utils
 from modules.upscaler import Upscaler, UpscalerData
 
 SWINIR_MODEL_URL = "https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN.pth"
@@ -32,28 +32,48 @@ class UpscalerSwinIR(Upscaler):
             scalers.append(model_data)
         self.scalers = scalers
 
-    def do_upscale(self, img: Image.Image, model_file: str) -> Image.Image:
-        current_config = (model_file, shared.opts.SWIN_tile)
+    def clear_cached_model(self):
+        if self._cached_model is None:
+            return
 
-        if self._cached_model_config == current_config:
+        print(f"Unloading cached SwinIR model ({upscaler_model_cache.format_cached_model_size(self._cached_model)})")
+        upscaler_model_cache.unload_cached_model(self._cached_model)
+        self._cached_model = None
+        self._cached_model_config = None
+
+    def do_upscale(self, img: Image.Image, model_file: str) -> Image.Image:
+        current_config = (model_file, shared.opts.SWIN_tile, getattr(shared.opts, 'SWIN_torch_compile', False))
+
+        cache_enabled = getattr(shared.opts, 'SWIN_model_cache', True)
+
+        if cache_enabled and self._cached_model is not None and self._cached_model_config == current_config:
             model = self._cached_model
         else:
+            self.clear_cached_model()
+
             try:
                 model = self.load_model(model_file)
             except Exception as e:
                 print(f"Failed loading SwinIR model {model_file}: {e}", file=sys.stderr)
                 return img
-            self._cached_model = model
-            self._cached_model_config = current_config
 
-        img = upscaler_utils.upscale_2(
-            img,
-            model,
-            tile_size=shared.opts.SWIN_tile,
-            tile_overlap=shared.opts.SWIN_tile_overlap,
-            scale=model.scale,
-            desc="SwinIR",
-        )
+            if cache_enabled:
+                self._cached_model = model
+                self._cached_model_config = current_config
+
+        try:
+            img = upscaler_utils.upscale_2(
+                img,
+                model,
+                tile_size=shared.opts.SWIN_tile,
+                tile_overlap=shared.opts.SWIN_tile_overlap,
+                scale=model.scale,
+                desc="SwinIR",
+            )
+        finally:
+            if not cache_enabled:
+                upscaler_model_cache.unload_cached_model(model)
+
         devices.torch_gc()
         return img
 
@@ -89,6 +109,7 @@ def on_ui_settings():
 
     shared.opts.add_option("SWIN_tile", shared.OptionInfo(192, "Tile size for all SwinIR.", gr.Slider, {"minimum": 16, "maximum": 512, "step": 16}, section=('upscaling', "Upscaling")))
     shared.opts.add_option("SWIN_tile_overlap", shared.OptionInfo(8, "Tile overlap, in pixels for SwinIR. Low values = visible seam.", gr.Slider, {"minimum": 0, "maximum": 48, "step": 1}, section=('upscaling', "Upscaling")))
+    shared.opts.add_option("SWIN_model_cache", shared.OptionInfo(True, "Cache SwinIR model in memory", gr.Checkbox, {"interactive": True}, section=('upscaling', "Upscaling")).info("disable to free RAM/VRAM after each SwinIR upscale"))
     shared.opts.add_option("SWIN_torch_compile", shared.OptionInfo(False, "Use torch.compile to accelerate SwinIR.", gr.Checkbox, {"interactive": True}, section=('upscaling', "Upscaling")).info("Takes longer on first run"))
 
 

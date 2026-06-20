@@ -12,9 +12,20 @@ import safetensors.torch
 
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.util import instantiate_from_config, ismap
-from modules import shared, sd_hijack, devices
+from modules import shared, sd_hijack, devices, upscaler_model_cache
 
 cached_ldsr_model: torch.nn.Module = None
+
+
+def clear_cached_ldsr_model():
+    global cached_ldsr_model
+
+    if cached_ldsr_model is None:
+        return
+
+    print(f"Unloading cached LDSR model ({upscaler_model_cache.format_cached_model_size(cached_ldsr_model)})")
+    upscaler_model_cache.unload_cached_model(cached_ldsr_model)
+    cached_ldsr_model = None
 
 
 # Create LDSR Class
@@ -22,7 +33,11 @@ class LDSR:
     def load_model_from_config(self, half_attention):
         global cached_ldsr_model
 
-        if shared.opts.ldsr_cached and cached_ldsr_model is not None:
+        cache_enabled = getattr(shared.opts, "ldsr_cached", False)
+        if not cache_enabled:
+            clear_cached_ldsr_model()
+
+        if cache_enabled and cached_ldsr_model is not None:
             print("Loading model from cache")
             model: torch.nn.Module = cached_ldsr_model
         else:
@@ -46,7 +61,7 @@ class LDSR:
             sd_hijack.model_hijack.hijack(model) # apply optimization
             model.eval()
 
-            if shared.opts.ldsr_cached:
+            if cache_enabled:
                 cached_ldsr_model = model
 
         return {"model": model}
@@ -146,6 +161,9 @@ class LDSR:
 
         # remove padding
         a = a.crop((0, 0) + tuple(np.array(im_og.size) * 4))
+
+        if not getattr(shared.opts, "ldsr_cached", False):
+            upscaler_model_cache.unload_cached_model(model["model"])
 
         del model
         gc.collect()
