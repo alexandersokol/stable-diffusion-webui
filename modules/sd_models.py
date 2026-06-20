@@ -12,7 +12,7 @@ from omegaconf import OmegaConf, ListConfig
 from urllib import request
 import ldm.modules.midas as midas
 
-from modules import paths, shared, modelloader, devices, script_callbacks, sd_vae, sd_disable_initialization, errors, hashes, sd_models_config, sd_unet, sd_models_xl, cache, extra_networks, processing, lowvram, sd_hijack, patches
+from modules import paths, shared, modelloader, devices, script_callbacks, sd_vae, sd_disable_initialization, errors, hashes, sd_models_config, sd_unet, sd_models_xl, cache, extra_networks, processing, lowvram, sd_hijack, patches, model_cache_budget
 from modules.timer import Timer
 from modules.shared import opts
 import tomesd
@@ -713,6 +713,7 @@ class SdModelData:
             pass
 
         if v is not None:
+            model_cache_budget.ensure_model_cache_info(v)
             self.loaded_sd_models.insert(0, v)
 
 
@@ -762,6 +763,53 @@ def send_model_to_device(m):
 def send_model_to_trash(m):
     m.to(device="meta")
     devices.torch_gc()
+
+
+def checkpoint_cache_max_ram_bytes():
+    max_ram_mb = getattr(shared.opts, "sd_checkpoints_max_ram_mb", 0)
+    return max(0, int(max_ram_mb or 0)) * 1024 * 1024
+
+
+def loaded_model_cache_summary():
+    cache_bytes = model_cache_budget.total_model_cache_bytes(model_data.loaded_sd_models)
+    max_bytes = checkpoint_cache_max_ram_bytes()
+
+    if max_bytes > 0:
+        return f"{model_cache_budget.format_bytes(cache_bytes)} / {model_cache_budget.format_bytes(max_bytes)}"
+
+    return model_cache_budget.format_bytes(cache_bytes)
+
+
+def loaded_model_cache_can_add_model():
+    return model_cache_budget.can_add_model_to_cache(
+        model_data.loaded_sd_models,
+        max_count=shared.opts.sd_checkpoints_limit,
+        max_bytes=checkpoint_cache_max_ram_bytes(),
+    )
+
+
+def enforce_loaded_model_cache_budget(protected_models=None, timer=None):
+    evicted_models = model_cache_budget.select_models_to_evict(
+        model_data.loaded_sd_models,
+        protected_models=protected_models,
+        max_count=shared.opts.sd_checkpoints_limit,
+        max_bytes=checkpoint_cache_max_ram_bytes(),
+    )
+
+    for model in evicted_models:
+        try:
+            model_data.loaded_sd_models.remove(model)
+        except ValueError:
+            continue
+
+        checkpoint_info = getattr(model, "sd_checkpoint_info", None)
+        title = getattr(checkpoint_info, "title", "unknown checkpoint")
+        size = model_cache_budget.format_bytes(model_cache_budget.ensure_model_cache_info(model))
+        print(f"Unloading cached checkpoint model {title} ({size}); cache is {loaded_model_cache_summary()}")
+        send_model_to_trash(model)
+
+        if timer is not None:
+            timer.record("send model to trash")
 
 
 def instantiate_from_config(config, state_dict=None):
@@ -855,6 +903,7 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
 
     sd_model.eval()
     model_data.set_sd_model(sd_model)
+    enforce_loaded_model_cache_budget(protected_models=[sd_model], timer=timer)
     model_data.was_loaded_at_least_once = True
 
     sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)  # Reload embeddings after model load as they may or may not fit the model
@@ -881,7 +930,7 @@ def reuse_model_from_already_loaded(sd_model, checkpoint_info, timer):
     If it is loaded, returns that (moving it to GPU if necessary, and moving the currently loadded model to CPU if necessary).
     If not, returns the model that can be used to load weights from checkpoint_info's file.
     If no such model exists, returns None.
-    Additionally deletes loaded models that are over the limit set in settings (sd_checkpoints_limit).
+    Additionally deletes loaded models that are over the count or RAM limits set in settings.
     """
 
     if sd_model is not None and sd_model.sd_checkpoint_info.filename == checkpoint_info.filename:
@@ -892,23 +941,20 @@ def reuse_model_from_already_loaded(sd_model, checkpoint_info, timer):
         timer.record("send model to cpu")
 
     already_loaded = None
-    for i in reversed(range(len(model_data.loaded_sd_models))):
-        loaded_model = model_data.loaded_sd_models[i]
+    for loaded_model in reversed(model_data.loaded_sd_models):
         if loaded_model.sd_checkpoint_info.filename == checkpoint_info.filename:
             already_loaded = loaded_model
-            continue
+            break
 
-        if len(model_data.loaded_sd_models) > shared.opts.sd_checkpoints_limit > 0:
-            print(f"Unloading model {len(model_data.loaded_sd_models)} over the limit of {shared.opts.sd_checkpoints_limit}: {loaded_model.sd_checkpoint_info.title}")
-            del model_data.loaded_sd_models[i]
-            send_model_to_trash(loaded_model)
-            timer.record("send model to trash")
+    protected_models = [model for model in (sd_model, already_loaded) if model is not None]
+    enforce_loaded_model_cache_budget(protected_models=protected_models, timer=timer)
 
     if already_loaded is not None:
         send_model_to_device(already_loaded)
         timer.record("send model to device")
 
         model_data.set_sd_model(already_loaded, already_loaded=True)
+        enforce_loaded_model_cache_budget(protected_models=[already_loaded], timer=timer)
 
         if not SkipWritingToConfig.skip:
             shared.opts.data["sd_model_checkpoint"] = already_loaded.sd_checkpoint_info.title
@@ -917,8 +963,8 @@ def reuse_model_from_already_loaded(sd_model, checkpoint_info, timer):
         print(f"Using already loaded model {already_loaded.sd_checkpoint_info.title}: done in {timer.summary()}")
         sd_vae.reload_vae_weights(already_loaded)
         return model_data.sd_model
-    elif shared.opts.sd_checkpoints_limit > 1 and len(model_data.loaded_sd_models) < shared.opts.sd_checkpoints_limit:
-        print(f"Loading model {checkpoint_info.title} ({len(model_data.loaded_sd_models) + 1} out of {shared.opts.sd_checkpoints_limit})")
+    elif shared.opts.sd_checkpoints_limit > 1 and loaded_model_cache_can_add_model():
+        print(f"Loading model {checkpoint_info.title} ({len(model_data.loaded_sd_models) + 1} out of {shared.opts.sd_checkpoints_limit}; cache {loaded_model_cache_summary()})")
 
         model_data.sd_model = None
         load_model(checkpoint_info)
@@ -997,6 +1043,7 @@ def reload_model_weights(sd_model=None, info=None, forced_reload=False):
     print(f"Weights loaded in {timer.summary()}.")
 
     model_data.set_sd_model(sd_model)
+    enforce_loaded_model_cache_budget(protected_models=[sd_model], timer=timer)
     sd_unet.apply_unet()
 
     return sd_model
