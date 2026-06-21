@@ -27,6 +27,9 @@ checkpoint_alisases = checkpoint_aliases  # for compatibility with old name
 checkpoint_title_search_index = []
 checkpoint_title_search_index_dirty = False
 checkpoints_loaded = collections.OrderedDict()
+MAX_SAFETENSORS_METADATA_BYTES = 16 * 1024 * 1024
+MAX_SAFETENSORS_NESTED_METADATA_BYTES = 1024 * 1024
+MAX_SAFETENSORS_THUMBNAIL_BYTES = 1024 * 1024
 
 
 class ModelType(enum.Enum):
@@ -313,13 +316,19 @@ def read_metadata_from_safetensors(filename):
         assert metadata_len > 2 and json_start in (b'{"', b"{'"), f"{filename} is not a safetensors file"
 
         res = {}
+        if metadata_len > MAX_SAFETENSORS_METADATA_BYTES:
+            errors.report(f"Skipping safetensors metadata for {filename}: header is {metadata_len} bytes")
+            return res
 
         try:
             json_data = json_start + file.read(metadata_len-2)
             json_obj = json.loads(json_data)
             for k, v in json_obj.get("__metadata__", {}).items():
+                if k == "modelspec.thumbnail" and isinstance(v, str) and len(v.encode("utf8")) > MAX_SAFETENSORS_THUMBNAIL_BYTES:
+                    continue
+
                 res[k] = v
-                if isinstance(v, str) and v[0:1] == '{':
+                if isinstance(v, str) and v[0:1] == '{' and len(v.encode("utf8")) <= MAX_SAFETENSORS_NESTED_METADATA_BYTES:
                     try:
                         res[k] = json.loads(v)
                     except Exception:

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -32,7 +33,10 @@ def load_sd_models_for_test(hashes_stub=None):
         "modules.script_callbacks": types.ModuleType("modules.script_callbacks"),
         "modules.sd_vae": types.ModuleType("modules.sd_vae"),
         "modules.sd_disable_initialization": types.ModuleType("modules.sd_disable_initialization"),
-        "modules.errors": types.SimpleNamespace(display=lambda *args, **kwargs: None),
+        "modules.errors": types.SimpleNamespace(
+            display=lambda *args, **kwargs: None,
+            report=lambda *args, **kwargs: None,
+        ),
         "modules.hashes": hashes_stub or types.SimpleNamespace(
             legacy_model_hash=lambda *args, **kwargs: "legacyhash",
             sha256_from_cache=lambda *args, **kwargs: None,
@@ -91,6 +95,13 @@ class FakeCheckpointInfo:
         self.title = title
 
 
+def write_safetensors_metadata(filename, metadata):
+    json_data = json.dumps({"__metadata__": metadata}).encode("utf8")
+    with open(filename, "wb") as file:
+        file.write(len(json_data).to_bytes(8, "little"))
+        file.write(json_data)
+
+
 class CheckpointLookupTests(unittest.TestCase):
     def test_checkpoint_info_uses_cached_legacy_model_hash(self):
         hash_calls = []
@@ -136,6 +147,64 @@ class CheckpointLookupTests(unittest.TestCase):
         self.assertIs(sd_models.get_closet_checkpoint_match("new-model"), checkpoint_info)
         self.assertFalse(sd_models.checkpoint_title_search_index_dirty)
 
+    def test_safetensors_metadata_reader_skips_declared_headers_over_limit(self):
+        sd_models = load_sd_models_for_test()
+        sd_models.MAX_SAFETENSORS_METADATA_BYTES = 32
+        read_sizes = []
+
+        class FakeSafetensorsFile:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, size=-1):
+                read_sizes.append(size)
+                if len(read_sizes) == 1:
+                    return (sd_models.MAX_SAFETENSORS_METADATA_BYTES + 1).to_bytes(8, "little")
+                if len(read_sizes) == 2:
+                    return b'{"'
+                raise AssertionError("oversized metadata body should not be read")
+
+        sd_models.open = lambda *args, **kwargs: FakeSafetensorsFile()
+
+        self.assertEqual(sd_models.read_metadata_from_safetensors("oversized.safetensors"), {})
+        self.assertEqual(read_sizes, [8, 2])
+
+    def test_safetensors_metadata_reader_keeps_oversized_nested_json_as_string(self):
+        sd_models = load_sd_models_for_test()
+        sd_models.MAX_SAFETENSORS_NESTED_METADATA_BYTES = 8
+        metadata_file = Path(self._testMethodName + ".safetensors")
+        nested_json = '{"large": true}'
+
+        try:
+            write_safetensors_metadata(metadata_file, {"sd_merge_recipe": nested_json})
+
+            metadata = sd_models.read_metadata_from_safetensors(metadata_file)
+
+            self.assertEqual(metadata["sd_merge_recipe"], nested_json)
+        finally:
+            metadata_file.unlink(missing_ok=True)
+
+    def test_safetensors_metadata_reader_skips_oversized_thumbnail(self):
+        sd_models = load_sd_models_for_test()
+        sd_models.MAX_SAFETENSORS_THUMBNAIL_BYTES = 8
+        metadata_file = Path(self._testMethodName + ".safetensors")
+
+        try:
+            write_safetensors_metadata(metadata_file, {
+                "modelspec.thumbnail": "x" * 16,
+                "author": "webui",
+            })
+
+            metadata = sd_models.read_metadata_from_safetensors(metadata_file)
+
+            self.assertNotIn("modelspec.thumbnail", metadata)
+            self.assertEqual(metadata["author"], "webui")
+        finally:
+            metadata_file.unlink(missing_ok=True)
+
 
 def test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index():
     CheckpointLookupTests("test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index").test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index()
@@ -147,6 +216,18 @@ def test_checkpoint_registration_marks_title_index_for_lazy_rebuild():
 
 def test_checkpoint_info_uses_cached_legacy_model_hash():
     CheckpointLookupTests("test_checkpoint_info_uses_cached_legacy_model_hash").test_checkpoint_info_uses_cached_legacy_model_hash()
+
+
+def test_safetensors_metadata_reader_skips_declared_headers_over_limit():
+    CheckpointLookupTests("test_safetensors_metadata_reader_skips_declared_headers_over_limit").test_safetensors_metadata_reader_skips_declared_headers_over_limit()
+
+
+def test_safetensors_metadata_reader_keeps_oversized_nested_json_as_string():
+    CheckpointLookupTests("test_safetensors_metadata_reader_keeps_oversized_nested_json_as_string").test_safetensors_metadata_reader_keeps_oversized_nested_json_as_string()
+
+
+def test_safetensors_metadata_reader_skips_oversized_thumbnail():
+    CheckpointLookupTests("test_safetensors_metadata_reader_skips_oversized_thumbnail").test_safetensors_metadata_reader_skips_oversized_thumbnail()
 
 
 if __name__ == "__main__":
