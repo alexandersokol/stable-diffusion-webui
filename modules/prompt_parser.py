@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import namedtuple
 import lark
+import torch
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][: in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -136,6 +137,19 @@ def get_learned_conditioning_prompt_schedules(prompts, base_steps, hires_steps=N
 ScheduledPromptConditioning = namedtuple("ScheduledPromptConditioning", ["end_at_step", "cond"])
 
 
+class ScheduledConditioning(list):
+    def __init__(self, entries=()):
+        super().__init__(entries)
+        self._last_schedule_step = None
+        self._last_schedule_index = 0
+
+
+class ScheduledConditioningBatch(list):
+    def __init__(self, schedules=()):
+        super().__init__(schedules)
+        self._reconstruct_cache = {}
+
+
 class SdConditioning(list):
     """
     A list with prompts for stable diffusion's conditioner model.
@@ -187,7 +201,7 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
         texts = SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
         conds = model.get_learned_conditioning(texts)
 
-        cond_schedule = []
+        cond_schedule = ScheduledConditioning()
         for i, (end_at_step, _) in enumerate(prompt_schedule):
             if isinstance(conds, dict):
                 cond = {k: v[i] for k, v in conds.items()}
@@ -199,7 +213,7 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
         cache[prompt] = cond_schedule
         res.append(cond_schedule)
 
-    return res
+    return ScheduledConditioningBatch(res)
 
 
 re_AND = re.compile(r"\bAND\b")
@@ -247,6 +261,7 @@ class MulticondLearnedConditioning:
     def __init__(self, shape, batch):
         self.shape: tuple = shape  # the shape field is needed to send this object to DDIM/PLMS
         self.batch: list[list[ComposableScheduledPromptConditioning]] = batch
+        self._reconstruct_cache = {}
 
 
 def get_multicond_learned_conditioning(model, prompts, steps, hires_steps=None, use_old_scheduling=False) -> MulticondLearnedConditioning:
@@ -277,23 +292,76 @@ class DictWithShape(dict):
         return self["crossattn"].shape
 
 
+def schedule_target_index(cond_schedule, current_step):
+    start_index = 0
+
+    if getattr(cond_schedule, "_last_schedule_step", None) is not None and current_step >= cond_schedule._last_schedule_step:
+        start_index = getattr(cond_schedule, "_last_schedule_index", 0)
+
+    target_index = 0
+    for current in range(start_index, len(cond_schedule)):
+        if current_step <= cond_schedule[current].end_at_step:
+            target_index = current
+            break
+
+    if hasattr(cond_schedule, "_last_schedule_step"):
+        cond_schedule._last_schedule_step = current_step
+        cond_schedule._last_schedule_index = target_index
+
+    return target_index
+
+
+def tensor_cache_is_compatible(tensor, shape, device, dtype):
+    return tensor is not None and tensor.shape == shape and tensor.device == device and tensor.dtype == dtype
+
+
+def get_tensor_cache(cache, name, shape, device, dtype):
+    if cache is None:
+        return torch.empty(shape, device=device, dtype=dtype)
+
+    tensor = cache.get(name)
+    if not tensor_cache_is_compatible(tensor, shape, device, dtype):
+        tensor = torch.empty(shape, device=device, dtype=dtype)
+        cache[name] = tensor
+
+    return tensor
+
+
+def get_dict_cache(cache, name, dict_cond, batch_size):
+    if cache is None:
+        return DictWithShape({k: torch.empty((batch_size,) + value.shape, device=value.device, dtype=value.dtype) for k, value in dict_cond.items()})
+
+    res = cache.get(name)
+    if not isinstance(res, DictWithShape) or set(res.keys()) != set(dict_cond.keys()):
+        res = None
+
+    if res is not None:
+        for k, value in dict_cond.items():
+            shape = (batch_size,) + value.shape
+            if not tensor_cache_is_compatible(res[k], shape, value.device, value.dtype):
+                res = None
+                break
+
+    if res is None:
+        res = DictWithShape({k: torch.empty((batch_size,) + value.shape, device=value.device, dtype=value.dtype) for k, value in dict_cond.items()})
+        cache[name] = res
+
+    return res
+
+
 def reconstruct_cond_batch(c: list[list[ScheduledPromptConditioning]], current_step):
     param = c[0][0].cond
     is_dict = isinstance(param, dict)
+    cache = getattr(c, "_reconstruct_cache", None)
 
     if is_dict:
         dict_cond = param
-        res = {k: torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype) for k, param in dict_cond.items()}
-        res = DictWithShape(res, (len(c),) + dict_cond['crossattn'].shape)
+        res = get_dict_cache(cache, "cond_batch", dict_cond, len(c))
     else:
-        res = torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype)
+        res = get_tensor_cache(cache, "cond_batch", (len(c),) + param.shape, param.device, param.dtype)
 
     for i, cond_schedule in enumerate(c):
-        target_index = 0
-        for current, entry in enumerate(cond_schedule):
-            if current_step <= entry.end_at_step:
-                target_index = current
-                break
+        target_index = schedule_target_index(cond_schedule, current_step)
 
         if is_dict:
             for k, param in cond_schedule[target_index].cond.items():
@@ -304,22 +372,28 @@ def reconstruct_cond_batch(c: list[list[ScheduledPromptConditioning]], current_s
     return res
 
 
-def stack_conds(tensors):
+def fill_stacked_conds(tensors, cache=None, cache_name="stacked_conds"):
     # if prompts have wildly different lengths above the limit we'll get tensors of different shapes
     # and won't be able to torch.stack them. So this fixes that.
     token_count = max([x.shape[0] for x in tensors])
-    for i in range(len(tensors)):
-        if tensors[i].shape[0] != token_count:
-            last_vector = tensors[i][-1:]
-            last_vector_repeated = last_vector.repeat([token_count - tensors[i].shape[0], 1])
-            tensors[i] = torch.vstack([tensors[i], last_vector_repeated])
+    param = tensors[0]
+    res = get_tensor_cache(cache, cache_name, (len(tensors), token_count) + param.shape[1:], param.device, param.dtype)
 
-    return torch.stack(tensors)
+    for i, tensor in enumerate(tensors):
+        res[i, :tensor.shape[0]] = tensor
+        if tensor.shape[0] != token_count:
+            res[i, tensor.shape[0]:] = tensor[-1:]
 
+    return res
+
+
+def stack_conds(tensors):
+    return fill_stacked_conds(tensors)
 
 
 def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
     param = c.batch[0][0].schedules[0].cond
+    cache = getattr(c, "_reconstruct_cache", None)
 
     tensors = []
     conds_list = []
@@ -328,11 +402,7 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
         conds_for_batch = []
 
         for composable_prompt in composable_prompts:
-            target_index = 0
-            for current, entry in enumerate(composable_prompt.schedules):
-                if current_step <= entry.end_at_step:
-                    target_index = current
-                    break
+            target_index = schedule_target_index(composable_prompt.schedules, current_step)
 
             conds_for_batch.append((len(tensors), composable_prompt.weight))
             tensors.append(composable_prompt.schedules[target_index].cond)
@@ -341,10 +411,10 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
 
     if isinstance(tensors[0], dict):
         keys = list(tensors[0].keys())
-        stacked = {k: stack_conds([x[k] for x in tensors]) for k in keys}
+        stacked = {k: fill_stacked_conds([x[k] for x in tensors], cache, f"multicond_{k}") for k in keys}
         stacked = DictWithShape(stacked, stacked['crossattn'].shape)
     else:
-        stacked = stack_conds(tensors).to(device=param.device, dtype=param.dtype)
+        stacked = fill_stacked_conds(tensors, cache, "multicond").to(device=param.device, dtype=param.dtype)
 
     return conds_list, stacked
 
@@ -460,5 +530,3 @@ def parse_prompt_attention(text):
 if __name__ == "__main__":
     import doctest
     doctest.testmod(optionflags=doctest.NORMALIZE_WHITESPACE)
-else:
-    import torch  # doctest faster
