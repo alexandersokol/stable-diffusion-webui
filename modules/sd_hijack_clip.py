@@ -1,5 +1,5 @@
 import math
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 
 import torch
 
@@ -42,6 +42,8 @@ class TextConditionalModel(torch.nn.Module):
         self.id_start = None
         self.id_end = None
         self.id_pad = None
+        self.token_tensor_cache = OrderedDict()
+        self.token_tensor_cache_max_size = 32
 
     def empty_chunk(self):
         """creates an empty PromptChunk and returns it"""
@@ -77,6 +79,63 @@ class TextConditionalModel(torch.nn.Module):
         transformers. nvpt is used as a maximum length in tokens. If text produces less teokens than nvpt, only this many is returned."""
 
         raise NotImplementedError
+
+    def textual_inversion_cache_signature(self):
+        embedding_db = getattr(self.hijack, "embedding_db", None)
+        word_embeddings = getattr(embedding_db, "word_embeddings", None)
+        if not word_embeddings:
+            return (id(embedding_db), id(word_embeddings), 0)
+
+        embeddings_signature = tuple(
+            (name, id(embedding), getattr(embedding, "shorthash", None), getattr(embedding, "vectors", None))
+            for name, embedding in word_embeddings.items()
+        )
+
+        return (id(embedding_db), id(word_embeddings), len(word_embeddings), embeddings_signature)
+
+    def token_tensor_cache_key(self, remade_batch_tokens, batch_multipliers):
+        tokenizer = getattr(self, "tokenizer", None)
+        wrapped_tokenizer = getattr(getattr(self, "wrapped", None), "tokenizer", None)
+        device = devices.device
+
+        return (
+            tuple(tuple(tokens) for tokens in remade_batch_tokens),
+            tuple(tuple(multipliers) for multipliers in batch_multipliers),
+            str(device),
+            getattr(device, "type", None),
+            getattr(device, "index", None),
+            self.id_end,
+            self.id_pad,
+            getattr(opts, "emphasis", None),
+            getattr(opts, "CLIP_stop_at_last_layers", None),
+            getattr(opts, "sdxl_clip_l_skip", None),
+            id(tokenizer),
+            id(wrapped_tokenizer),
+            self.textual_inversion_cache_signature(),
+        )
+
+    def get_token_tensors(self, remade_batch_tokens, batch_multipliers):
+        cache_key = self.token_tensor_cache_key(remade_batch_tokens, batch_multipliers)
+        cached = self.token_tensor_cache.get(cache_key)
+        if cached is not None:
+            self.token_tensor_cache.move_to_end(cache_key)
+            return cached
+
+        tokens = torch.asarray(remade_batch_tokens).to(devices.device)
+
+        # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
+        if self.id_end != self.id_pad:
+            for batch_pos in range(len(remade_batch_tokens)):
+                index = remade_batch_tokens[batch_pos].index(self.id_end)
+                tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
+
+        multipliers = torch.asarray(batch_multipliers).to(devices.device)
+        cached = (tokens, multipliers)
+        self.token_tensor_cache[cache_key] = cached
+        while len(self.token_tensor_cache) > self.token_tensor_cache_max_size:
+            self.token_tensor_cache.popitem(last=False)
+
+        return cached
 
     def tokenize_line(self, line):
         """
@@ -258,13 +317,7 @@ class TextConditionalModel(torch.nn.Module):
         Multipliers are used to give more or less weight to the outputs of transformers network. Each multiplier
         corresponds to one token.
         """
-        tokens = torch.asarray(remade_batch_tokens).to(devices.device)
-
-        # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
-        if self.id_end != self.id_pad:
-            for batch_pos in range(len(remade_batch_tokens)):
-                index = remade_batch_tokens[batch_pos].index(self.id_end)
-                tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
+        tokens, multipliers = self.get_token_tensors(remade_batch_tokens, batch_multipliers)
 
         z = self.encode_with_transformers(tokens)
 
@@ -272,7 +325,7 @@ class TextConditionalModel(torch.nn.Module):
 
         emphasis = sd_emphasis.get_current_option(opts.emphasis)()
         emphasis.tokens = remade_batch_tokens
-        emphasis.multipliers = torch.asarray(batch_multipliers).to(devices.device)
+        emphasis.multipliers = multipliers
         emphasis.z = z
 
         emphasis.after_transformers()
