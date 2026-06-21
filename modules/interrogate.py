@@ -54,6 +54,8 @@ class InterrogateModels:
         self.skip_categories = []
         self.content_dir = content_dir
         self.running_on_cpu = devices.device_interrogate == torch.device("cpu")
+        self.text_feature_cache = {}
+        self.text_feature_cache_model_key = None
 
     def categories(self):
         if not os.path.exists(self.content_dir):
@@ -63,6 +65,7 @@ class InterrogateModels:
            return self.loaded_categories
 
         self.loaded_categories = []
+        self.clear_text_feature_cache()
 
         if os.path.exists(self.content_dir):
             self.skip_categories = shared.opts.interrogate_clip_skip_categories
@@ -79,6 +82,59 @@ class InterrogateModels:
                 self.loaded_categories.append(Category(name=filename.stem, topn=topn, items=lines))
 
         return self.loaded_categories
+
+    def clear_text_feature_cache(self):
+        self.text_feature_cache.clear()
+
+    def current_text_feature_cache_model_key(self):
+        return (
+            id(self.clip_model),
+            str(devices.device_interrogate),
+            str(self.dtype),
+            int(shared.opts.interrogate_clip_dict_limit),
+        )
+
+    def refresh_text_feature_cache_model_key(self):
+        model_key = self.current_text_feature_cache_model_key()
+
+        if self.text_feature_cache_model_key != model_key:
+            self.clear_text_feature_cache()
+            self.text_feature_cache_model_key = model_key
+
+    def limited_text_array(self, text_array):
+        if shared.opts.interrogate_clip_dict_limit != 0:
+            text_array = text_array[0:int(shared.opts.interrogate_clip_dict_limit)]
+
+        return text_array
+
+    def text_feature_cache_key(self, source_text_array, text_array, category_name=None):
+        return (
+            self.text_feature_cache_model_key,
+            category_name,
+            id(source_text_array),
+            len(text_array),
+            int(shared.opts.interrogate_clip_dict_limit),
+        )
+
+    def cached_text_features(self, text_array, category_name=None):
+        import clip
+
+        self.refresh_text_feature_cache_model_key()
+
+        source_text_array = text_array
+        text_array = self.limited_text_array(text_array)
+        cache_key = self.text_feature_cache_key(source_text_array, text_array, category_name)
+        cached = self.text_feature_cache.get(cache_key)
+
+        if cached is not None:
+            return text_array, cached.to(device=devices.device_interrogate, dtype=self.dtype)
+
+        text_tokens = clip.tokenize(list(text_array), truncate=True).to(devices.device_interrogate)
+        text_features = self.clip_model.encode_text(text_tokens).type(self.dtype)
+        text_features /= text_features.norm(dim=-1, keepdim=True)
+        self.text_feature_cache[cache_key] = text_features.detach().cpu()
+
+        return text_array, text_features
 
     def create_fake_fairscale(self):
         class FakeFairscale:
@@ -132,6 +188,7 @@ class InterrogateModels:
         self.clip_model = self.clip_model.to(devices.device_interrogate)
 
         self.dtype = torch_utils.get_param(self.clip_model).dtype
+        self.refresh_text_feature_cache_model_key()
 
     def send_clip_to_ram(self):
         if not shared.opts.interrogate_keep_models_in_memory:
@@ -149,18 +206,11 @@ class InterrogateModels:
 
         devices.torch_gc()
 
-    def rank(self, image_features, text_array, top_count=1):
-        import clip
-
+    def rank(self, image_features, text_array, top_count=1, category_name=None):
         devices.torch_gc()
 
-        if shared.opts.interrogate_clip_dict_limit != 0:
-            text_array = text_array[0:int(shared.opts.interrogate_clip_dict_limit)]
-
+        text_array, text_features = self.cached_text_features(text_array, category_name)
         top_count = min(top_count, len(text_array))
-        text_tokens = clip.tokenize(list(text_array), truncate=True).to(devices.device_interrogate)
-        text_features = self.clip_model.encode_text(text_tokens).type(self.dtype)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
 
         similarity = torch.zeros((1, len(text_array))).to(devices.device_interrogate)
         for i in range(image_features.shape[0]):
@@ -205,7 +255,7 @@ class InterrogateModels:
                 image_features /= image_features.norm(dim=-1, keepdim=True)
 
                 for cat in self.categories():
-                    matches = self.rank(image_features, cat.items, top_count=cat.topn)
+                    matches = self.rank(image_features, cat.items, top_count=cat.topn, category_name=cat.name)
                     for match, score in matches:
                         if shared.opts.interrogate_return_ranks:
                             res += f", ({match}:{score/100:.3f})"
