@@ -13,6 +13,8 @@ from modules.paths_internal import extensions_dir, extensions_builtin_dir, scrip
 extensions: list[Extension] = []
 extension_paths: dict[str, Extension] = {}
 loaded_extensions: dict[str, Exception] = {}
+repo_metadata_cache = {}
+repo_metadata_cache_lock = threading.RLock()
 
 
 os.makedirs(extensions_dir, exist_ok=True)
@@ -102,6 +104,51 @@ class ExtensionMetadata:
             yield CallbackOrderInfo(callback_name, before, after)
 
 
+def repo_metadata_cache_key(path):
+    return os.path.abspath(path)
+
+
+def repo_metadata_signature(path):
+    return cache.file_signature(os.path.join(path, ".git"))
+
+
+def get_repo_metadata_cache(path):
+    try:
+        signature = repo_metadata_signature(path)
+    except FileNotFoundError:
+        return None
+
+    key = repo_metadata_cache_key(path)
+    with repo_metadata_cache_lock:
+        entry = repo_metadata_cache.get(key)
+        if cache.cached_file_entry_is_fresh(entry, signature) and "value" in entry:
+            return dict(entry["value"])
+
+    return None
+
+
+def set_repo_metadata_cache(path, value):
+    if value is None:
+        return
+
+    try:
+        signature = repo_metadata_signature(path)
+    except FileNotFoundError:
+        return
+
+    key = repo_metadata_cache_key(path)
+    with repo_metadata_cache_lock:
+        repo_metadata_cache[key] = {**signature, "value": dict(value)}
+
+
+def clear_repo_metadata_cache(path=None):
+    with repo_metadata_cache_lock:
+        if path is None:
+            repo_metadata_cache.clear()
+        else:
+            repo_metadata_cache.pop(repo_metadata_cache_key(path), None)
+
+
 class Extension:
     lock = threading.Lock()
     cached_fields = ['remote', 'commit_date', 'branch', 'commit_hash', 'version']
@@ -134,6 +181,13 @@ class Extension:
         if self.is_builtin or self.have_info_from_repo:
             return
 
+        d = get_repo_metadata_cache(self.path)
+        if d is not None:
+            self.from_dict(d)
+            self.have_info_from_repo = True
+            self.status = 'unknown' if self.status == '' else self.status
+            return
+
         def read_from_repo():
             with self.lock:
                 if self.have_info_from_repo:
@@ -145,7 +199,10 @@ class Extension:
 
         try:
             d = cache.cached_data_for_file('extensions-git', self.name, os.path.join(self.path, ".git"), read_from_repo)
-            self.from_dict(d)
+            if d is not None:
+                self.from_dict(d)
+                self.have_info_from_repo = True
+                set_repo_metadata_cache(self.path, d)
         except FileNotFoundError:
             pass
         self.status = 'unknown' if self.status == '' else self.status
@@ -223,6 +280,7 @@ class Extension:
         repo.git.fetch(all=True)
         repo.git.reset(commit, hard=True)
         self.have_info_from_repo = False
+        clear_repo_metadata_cache(self.path)
 
 
 def list_extensions():
