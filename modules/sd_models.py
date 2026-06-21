@@ -89,7 +89,7 @@ class CheckpointInfo:
         self.name = name
         self.name_for_extra = os.path.splitext(os.path.basename(filename))[0]
         self.model_name = os.path.splitext(name.replace("/", "_").replace("\\", "_"))[0]
-        self.hash = model_hash(filename)
+        self.hash = hashes.legacy_model_hash(filename, f"checkpoint/{name}")
 
         self.sha256 = hashes.sha256_from_cache(self.filename, f"checkpoint/{name}")
         self.shorthash = self.sha256[0:10] if self.sha256 else None
@@ -233,18 +233,7 @@ def get_closet_checkpoint_match(search_string):
 
 
 def model_hash(filename):
-    """old hash that only looks at a small part of the file and is prone to collisions"""
-
-    try:
-        with open(filename, "rb") as file:
-            import hashlib
-            m = hashlib.sha256()
-
-            file.seek(0x100000)
-            m.update(file.read(0x10000))
-            return m.hexdigest()[0:8]
-    except FileNotFoundError:
-        return 'NOFILE'
+    return hashes.legacy_model_hash(filename, f"checkpoint/{os.path.basename(filename)}")
 
 
 def select_checkpoint():

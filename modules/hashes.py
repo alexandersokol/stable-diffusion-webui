@@ -19,6 +19,23 @@ def calculate_sha256(filename):
     return hash_sha256.hexdigest()
 
 
+def calculate_legacy_model_hash(filename):
+    """old model hash that only looks at a small part of the file and is prone to collisions"""
+
+    with open(filename, "rb") as file:
+        hash_sha256 = hashlib.sha256()
+        file.seek(0x100000)
+        hash_sha256.update(file.read(0x10000))
+        return hash_sha256.hexdigest()[0:8]
+
+
+def legacy_model_hash(filename, title):
+    try:
+        return modules.cache.cached_data_for_file("legacy-model-hashes", title, filename, lambda: calculate_legacy_model_hash(filename))
+    except FileNotFoundError:
+        return "NOFILE"
+
+
 def sha256_from_cache(filename, title, use_addnet_hash=False):
     hashes = cache("hashes-addnet") if use_addnet_hash else cache("hashes")
     try:

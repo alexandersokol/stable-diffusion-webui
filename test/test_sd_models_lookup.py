@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 
-def load_sd_models_for_test():
+def load_sd_models_for_test(hashes_stub=None):
     import modules as modules_package
 
     sd_models_path = Path(__file__).resolve().parents[1] / "modules" / "sd_models.py"
@@ -33,7 +33,10 @@ def load_sd_models_for_test():
         "modules.sd_vae": types.ModuleType("modules.sd_vae"),
         "modules.sd_disable_initialization": types.ModuleType("modules.sd_disable_initialization"),
         "modules.errors": types.SimpleNamespace(display=lambda *args, **kwargs: None),
-        "modules.hashes": types.SimpleNamespace(sha256_from_cache=lambda *args, **kwargs: None),
+        "modules.hashes": hashes_stub or types.SimpleNamespace(
+            legacy_model_hash=lambda *args, **kwargs: "legacyhash",
+            sha256_from_cache=lambda *args, **kwargs: None,
+        ),
         "modules.sd_models_config": types.ModuleType("modules.sd_models_config"),
         "modules.sd_unet": types.ModuleType("modules.sd_unet"),
         "modules.sd_models_xl": types.ModuleType("modules.sd_models_xl"),
@@ -60,6 +63,9 @@ def load_sd_models_for_test():
         )
 
     sys.modules.update(stubs)
+    for name, module in stubs.items():
+        if name.startswith("modules."):
+            setattr(modules_package, name.split(".", 1)[1], module)
 
     try:
         spec = importlib.util.spec_from_file_location("_test_modules_sd_models", sd_models_path)
@@ -86,6 +92,19 @@ class FakeCheckpointInfo:
 
 
 class CheckpointLookupTests(unittest.TestCase):
+    def test_checkpoint_info_uses_cached_legacy_model_hash(self):
+        hash_calls = []
+        hashes_stub = types.SimpleNamespace(
+            legacy_model_hash=lambda filename, title: hash_calls.append((filename, title)) or "cachedhash",
+            sha256_from_cache=lambda *args, **kwargs: None,
+        )
+        sd_models = load_sd_models_for_test(hashes_stub=hashes_stub)
+
+        checkpoint_info = sd_models.CheckpointInfo("example.ckpt")
+
+        self.assertEqual(checkpoint_info.hash, "cachedhash")
+        self.assertEqual(hash_calls, [("example.ckpt", "checkpoint/example.ckpt")])
+
     def test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index(self):
         sd_models = load_sd_models_for_test()
         longer = FakeCheckpointInfo("z-folder/very-long-foo-model.safetensors [abc123]")
@@ -124,6 +143,10 @@ def test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index():
 
 def test_checkpoint_registration_marks_title_index_for_lazy_rebuild():
     CheckpointLookupTests("test_checkpoint_registration_marks_title_index_for_lazy_rebuild").test_checkpoint_registration_marks_title_index_for_lazy_rebuild()
+
+
+def test_checkpoint_info_uses_cached_legacy_model_hash():
+    CheckpointLookupTests("test_checkpoint_info_uses_cached_legacy_model_hash").test_checkpoint_info_uses_cached_legacy_model_hash()
 
 
 if __name__ == "__main__":
