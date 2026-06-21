@@ -44,8 +44,8 @@ class FakeExtraNetworksPage(ui_extra_networks.ExtraNetworksPage):
                 "filename": filename,
                 "shorthash": f"hash-{index}",
                 "preview": None,
-                "description": "",
-                "search_terms": [f"item-{index}"],
+                "description": f"description for item-{index}",
+                "search_terms": [f"item-{index}", f"group-{index % 2}"],
                 "prompt": ui_extra_networks.quote_js(f"item-{index}"),
                 "local_preview": str(self.root / f"item-{index}.preview.png"),
                 "sort_keys": {"default": index, "name": f"item-{index}", "date_created": index, "date_modified": index},
@@ -132,6 +132,64 @@ def test_create_card_batch_html_zero_page_size_renders_all_cards():
             assert "extra-networks-load-more" not in html
             assert page.metadata_reads == ["item-0", "item-1", "item-2"]
         finally:
+            shared.opts = original_opts
+
+
+def test_create_card_batch_html_filters_search_before_paging():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_opts = patch_opts(page_size=2)
+        try:
+            page = FakeExtraNetworksPage(Path(temp_dir), 6)
+            page.create_html("txt2img")
+
+            html, next_offset, total = page.create_card_batch_html(
+                "txt2img",
+                offset=0,
+                limit=2,
+                include_load_more=True,
+                search="group-1",
+            )
+
+            assert total == 3
+            assert next_offset == 2
+            assert 'data-name="item-1"' in html
+            assert 'data-name="item-3"' in html
+            assert 'data-name="item-5"' not in html
+            assert "Load more (1)" in html
+        finally:
+            shared.opts = original_opts
+
+
+def test_get_page_cards_sorts_server_side_before_paging():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_opts = patch_opts(page_size=2)
+        original_pages = list(ui_extra_networks.extra_pages)
+        try:
+            page = FakeExtraNetworksPage(Path(temp_dir), 4)
+            ui_extra_networks.extra_pages.clear()
+            ui_extra_networks.extra_pages.append(page)
+            page.create_html("txt2img")
+
+            response = ui_extra_networks.get_page_cards(
+                page="fake",
+                tabname="txt2img",
+                offset=0,
+                limit=2,
+                sort="name",
+                sort_dir="Descending",
+            )
+            payload = json.loads(response.body)
+
+            assert payload["offset"] == 0
+            assert payload["next_offset"] == 2
+            assert payload["total"] == 4
+            assert payload["complete"] is False
+            assert payload["html"].index('data-name="item-3"') < payload["html"].index('data-name="item-2"')
+            assert 'data-name="item-1"' not in payload["html"]
+            assert 'data-name="item-0"' not in payload["html"]
+        finally:
+            ui_extra_networks.extra_pages.clear()
+            ui_extra_networks.extra_pages.extend(original_pages)
             shared.opts = original_opts
 
 

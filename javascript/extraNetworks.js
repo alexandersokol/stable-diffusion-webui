@@ -15,6 +15,86 @@ function toggleCss(key, css, enable) {
     }
 }
 
+function extraNetworksDebounce(func, wait) {
+    var timeout = null;
+
+    return function() {
+        var args = arguments;
+        var context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(function() {
+            func.apply(context, args);
+        }, wait);
+    };
+}
+
+function extraNetworksCardSearchText(card) {
+    if (!Object.prototype.hasOwnProperty.call(card.dataset, "searchText")) {
+        card.dataset.searchText = Array.prototype.map.call(card.querySelectorAll('.search_terms, .description'), function(t) {
+            return t.textContent.toLowerCase();
+        }).join(" ");
+    }
+
+    return card.dataset.searchText;
+}
+
+function extraNetworksGetSortParams(tabname_full) {
+    var sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
+    var activeSearchElem = gradioApp().querySelector('#' + tabname_full + "_controls .extra-network-control--sort.extra-network-control--enabled");
+
+    return {
+        search: (gradioApp().querySelector("#" + tabname_full + "_extra_search") || {}).value || "",
+        sort: activeSearchElem ? activeSearchElem.dataset.sortkey : "default",
+        sort_dir: sort_dir ? sort_dir.dataset.sortdir : "Ascending"
+    };
+}
+
+function extraNetworksRememberPaging(cards) {
+    var nextButton = cards.querySelector(".extra-networks-load-more");
+    if (!nextButton) return;
+
+    cards.dataset.extraNetworksPage = nextButton.dataset.page;
+    cards.dataset.extraNetworksTabname = nextButton.dataset.tabname;
+    cards.dataset.extraNetworksLimit = nextButton.dataset.limit;
+}
+
+var extraNetworksPageRequestId = {};
+
+function extraNetworksReloadFirstPage(tabname_full, callback) {
+    var cards = gradioApp().getElementById(tabname_full + "_cards");
+    if (!cards) return false;
+
+    extraNetworksRememberPaging(cards);
+
+    var limit = parseInt(cards.dataset.extraNetworksLimit || "0");
+    if (!limit) return false;
+
+    var page = cards.dataset.extraNetworksPage;
+    var tabname = cards.dataset.extraNetworksTabname;
+    if (!page || !tabname) return false;
+
+    var params = extraNetworksGetSortParams(tabname_full);
+    params.page = page;
+    params.tabname = tabname;
+    params.offset = 0;
+    params.limit = limit;
+
+    var requestId = (extraNetworksPageRequestId[tabname_full] || 0) + 1;
+    extraNetworksPageRequestId[tabname_full] = requestId;
+
+    requestGet("./sd_extra_networks/page-cards", params, function(data) {
+        if (extraNetworksPageRequestId[tabname_full] !== requestId) return;
+
+        cards.innerHTML = data.html || "";
+        cards.dataset.extraNetworksServerPaging = "true";
+        extraNetworksRememberPaging(cards);
+
+        if (callback) callback();
+    });
+
+    return true;
+}
+
 function setupExtraNetworksForTab(tabname) {
     function registerPrompt(tabname, id) {
         var textarea = gradioApp().querySelector("#" + id + " > label > textarea");
@@ -48,13 +128,16 @@ function setupExtraNetworksForTab(tabname) {
             return; // `return` is equivalent of `continue` but for forEach loops.
         }
 
+        var cardsContainer = gradioApp().getElementById(tabname_full + "_cards");
+        if (cardsContainer) {
+            extraNetworksRememberPaging(cardsContainer);
+        }
+
         var applyFilter = function(force) {
             var searchTerm = search.value.toLowerCase();
-            gradioApp().querySelectorAll('#' + tabname + '_extra_tabs div.card').forEach(function(elem) {
+            gradioApp().querySelectorAll('#' + tabname_full + ' div.card').forEach(function(elem) {
                 var searchOnly = elem.querySelector('.search_only');
-                var text = Array.prototype.map.call(elem.querySelectorAll('.search_terms, .description'), function(t) {
-                    return t.textContent.toLowerCase();
-                }).join(" ");
+                var text = extraNetworksCardSearchText(elem);
 
                 var visible = text.indexOf(searchTerm) != -1;
                 if (searchOnly && searchTerm.length < 4) {
@@ -99,26 +182,39 @@ function setupExtraNetworksForTab(tabname) {
                 sortedCards.reverse();
             }
 
-            parent.innerHTML = '';
-
-            var frag = document.createDocumentFragment();
             sortedCards.forEach(function(card) {
-                frag.appendChild(card);
+                parent.appendChild(card);
             });
-            parent.appendChild(frag);
+
+            var loadMoreButton = parent.querySelector(".extra-networks-load-more");
+            if (loadMoreButton) {
+                parent.appendChild(loadMoreButton);
+            }
         };
 
-        search.addEventListener("input", function() {
-            if (extraNetworksLoadAllCards(tabname_full, function() {
+        var debouncedApplyFilter = extraNetworksDebounce(function() {
+            if (extraNetworksReloadFirstPage(tabname_full, function() {
                 applyFilter(true);
             })) {
                 return;
             }
 
+            applyFilter(true);
+        }, 200);
+
+        search.addEventListener("input", debouncedApplyFilter);
+
+        var initialSortParams = extraNetworksGetSortParams(tabname_full);
+        var shouldReloadInitialPage = cardsContainer && cardsContainer.querySelector(".extra-networks-load-more") && (
+            initialSortParams.search || initialSortParams.sort != "default" || initialSortParams.sort_dir == "Descending"
+        );
+        if (!shouldReloadInitialPage || !extraNetworksReloadFirstPage(tabname_full, function() {
+            applyFilter(true);
+        })) {
+            applySort();
             applyFilter();
-        });
-        applySort();
-        applyFilter();
+        }
+
         extraNetworksApplySort[tabname_full] = applySort;
         extraNetworksApplyFilter[tabname_full] = applyFilter;
 
@@ -413,7 +509,7 @@ function extraNetworksControlSortOnClick(event, tabname, extra_networks_tabname)
 
     self.classList.add('extra-network-control--enabled');
 
-    if (extraNetworksLoadAllCards(tabname + "_" + extra_networks_tabname, function() {
+    if (extraNetworksReloadFirstPage(tabname + "_" + extra_networks_tabname, function() {
         applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
     })) {
         return;
@@ -440,7 +536,7 @@ function extraNetworksControlSortDirOnClick(event, tabname, extra_networks_tabna
         event.currentTarget.dataset.sortdir = "Ascending";
         event.currentTarget.setAttribute("title", "Sort ascending");
     }
-    if (extraNetworksLoadAllCards(tabname + "_" + extra_networks_tabname, function() {
+    if (extraNetworksReloadFirstPage(tabname + "_" + extra_networks_tabname, function() {
         applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
     })) {
         return;
@@ -653,7 +749,14 @@ function extraNetworksLoadMoreCards(eventOrButton, loadAll, callback) {
     button.dataset.loading = "true";
     button.textContent = "Loading...";
 
-    requestGet("./sd_extra_networks/page-cards", {page: page, tabname: tabname, offset: offset, limit: limit}, function(data) {
+    var tabname_full = tabname + "_" + page;
+    var requestData = extraNetworksGetSortParams(tabname_full);
+    requestData.page = page;
+    requestData.tabname = tabname;
+    requestData.offset = offset;
+    requestData.limit = limit;
+
+    requestGet("./sd_extra_networks/page-cards", requestData, function(data) {
         var wrapper = document.createElement("DIV");
         wrapper.innerHTML = data.html || "";
 
@@ -661,6 +764,7 @@ function extraNetworksLoadMoreCards(eventOrButton, loadAll, callback) {
         while (wrapper.firstElementChild) {
             cards.appendChild(wrapper.firstElementChild);
         }
+        extraNetworksRememberPaging(cards);
 
         if (loadAll && data && !data.complete) {
             var nextButton = cards.querySelector(".extra-networks-load-more");

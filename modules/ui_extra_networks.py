@@ -180,7 +180,7 @@ def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     return JSONResponse({"html": item_html})
 
 
-def get_page_cards(page: str = "", tabname: str = "", offset: int = 0, limit: int = 0):
+def get_page_cards(page: str = "", tabname: str = "", offset: int = 0, limit: int = 0, search: str = "", sort: str = "", sort_dir: str = ""):
     from starlette.responses import JSONResponse
 
     page = find_page(page)
@@ -197,7 +197,15 @@ def get_page_cards(page: str = "", tabname: str = "", offset: int = 0, limit: in
     except (TypeError, ValueError):
         limit = 0
 
-    html_cards, next_offset, total = page.create_card_batch_html(tabname, offset=offset, limit=limit, include_load_more=True)
+    html_cards, next_offset, total = page.create_card_batch_html(
+        tabname,
+        offset=offset,
+        limit=limit,
+        include_load_more=True,
+        search=search,
+        sort=sort,
+        sort_dir=sort_dir,
+    )
 
     return JSONResponse({
         "html": html_cards,
@@ -594,6 +602,68 @@ class ExtraNetworksPage:
         except (TypeError, ValueError):
             return 100
 
+    def item_local_path(self, item: dict) -> str:
+        local_path = ""
+        filename = item.get("filename", "")
+        for reldir in self.allowed_directories_for_previews():
+            absdir = os.path.abspath(reldir)
+
+            if filename.startswith(absdir):
+                local_path = filename[len(absdir):]
+
+        return local_path
+
+    def item_is_search_only(self, item: dict) -> bool:
+        if shared.opts.extra_networks_hidden_models == "Always":
+            return False
+
+        local_path = self.item_local_path(item)
+        return "/." in local_path or "\\." in local_path
+
+    def item_is_visible_for_search(self, item: dict, search_term: str) -> bool:
+        search_only = self.item_is_search_only(item)
+
+        if search_only and shared.opts.extra_networks_hidden_models == "Never":
+            return False
+
+        return not search_only or len(search_term) >= 4
+
+    def item_search_text(self, item: dict) -> str:
+        text = [str(x) for x in item.get("search_terms", [])]
+        if shared.opts.extra_networks_card_show_desc:
+            if "user_metadata" not in item:
+                self.read_user_metadata(item)
+            text.append(str(item.get("description", "") or ""))
+
+        return " ".join(text).lower()
+
+    def filter_card_items(self, items: list[dict], search: str = "") -> list[dict]:
+        search_term = (search or "").lower()
+
+        return [
+            item
+            for item in items
+            if self.item_is_visible_for_search(item, search_term)
+            and (not search_term or search_term in self.item_search_text(item))
+        ]
+
+    def sorted_card_items(self, items: list[dict], sort: str = "", sort_dir: str = "") -> list[dict]:
+        if not sort:
+            return items
+
+        def sort_value(item):
+            return item.get("sort_keys", {}).get(sort, "")
+
+        sort_values = [sort_value(item) for item in items]
+        use_numeric_sort = all(not isinstance(x, bool) and str(x).lstrip("-").isdigit() for x in sort_values)
+
+        def sort_key(item):
+            value = sort_value(item)
+            return int(value) if use_numeric_sort else str(value).lower()
+
+        reverse = sort_dir == "Descending"
+        return sorted(items, key=sort_key, reverse=reverse)
+
     def create_load_more_html(self, tabname: str, next_offset: int, total: int) -> str:
         if next_offset >= total:
             return ""
@@ -611,8 +681,9 @@ class ExtraNetworksPage:
             f"</button>"
         )
 
-    def create_card_batch_html(self, tabname: str, offset=0, limit=None, include_load_more=False) -> tuple[str, int, int]:
-        items = list(self.items.values())
+    def create_card_batch_html(self, tabname: str, offset=0, limit=None, include_load_more=False, search: str = "", sort: str = "", sort_dir: str = "") -> tuple[str, int, int]:
+        items = self.filter_card_items(list(self.items.values()), search)
+        items = self.sorted_card_items(items, sort, sort_dir)
         total = len(items)
 
         if limit is None:
