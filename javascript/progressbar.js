@@ -70,7 +70,7 @@ function randomId(taskType) {
     return "task(" + prefix + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + Math.random().toString(36).slice(2, 7) + ")";
 }
 
-var activeProgressRequests = {};
+var progressSessions = {};
 
 function progressRefreshPeriod(multiplier) {
     var basePeriod = opts.live_preview_refresh_period || 500;
@@ -79,175 +79,282 @@ function progressRefreshPeriod(multiplier) {
     return Math.max(basePeriod * multiplier, 2000);
 }
 
-// starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
-// preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
-// calls onProgress every time there is a progress update
-function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
-    if (!id_task || activeProgressRequests[id_task]) return;
-
-    activeProgressRequests[id_task] = true;
-
-    var dateStart = new Date();
-    var wasEverActive = false;
+function createProgressSubscriber(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout) {
     var parentProgressbar = progressbarContainer.parentNode;
-    var wakeLock = null;
-    var progressErrors = 0;
-    var livePreviewErrors = 0;
-
-    var requestWakeLock = async function() {
-        if (!opts.prevent_screen_sleep_during_generation || wakeLock) return;
-        try {
-            wakeLock = await navigator.wakeLock.request('screen');
-        } catch (err) {
-            console.error('Wake Lock is not supported.');
-        }
-    };
-
-    var releaseWakeLock = async function() {
-        if (!opts.prevent_screen_sleep_during_generation || !wakeLock) return;
-        try {
-            await wakeLock.release();
-            wakeLock = null;
-        } catch (err) {
-            console.error('Wake Lock release failed', err);
-        }
-    };
-
     var divProgress = document.createElement('div');
     divProgress.className = 'progressDiv';
     divProgress.style.display = opts.show_progressbar ? "block" : "none";
+
     var divInner = document.createElement('div');
     divInner.className = 'progress';
 
     divProgress.appendChild(divInner);
     parentProgressbar.insertBefore(divProgress, progressbarContainer);
 
-    var livePreview = null;
-
-    var removeProgressBar = function() {
-        releaseWakeLock();
-        if (!divProgress) return;
-
-        setTitle("");
-        delete activeProgressRequests[id_task];
-        parentProgressbar.removeChild(divProgress);
-        if (gallery && livePreview) gallery.removeChild(livePreview);
-        atEnd();
-
-        divProgress = null;
+    return {
+        id_task: id_task,
+        dateStart: new Date(),
+        wasEverActive: false,
+        parentProgressbar: parentProgressbar,
+        gallery: gallery,
+        atEnd: atEnd || function() {},
+        onProgress: onProgress,
+        inactivityTimeout: inactivityTimeout,
+        divProgress: divProgress,
+        divInner: divInner,
+        livePreview: null,
+        removed: false
     };
+}
 
-    var retryProgress = function() {
-        if (!divProgress) return;
+function removeProgressSubscriber(session, subscriber) {
+    if (subscriber.removed) return;
 
-        progressErrors += 1;
-        divInner.style.background = "";
-        divInner.textContent = "Connection lost. Reconnecting...";
+    subscriber.removed = true;
 
-        setTimeout(() => {
-            funProgress(id_task);
-        }, Math.min(1000 * progressErrors, 5000));
-    };
-
-    var funProgress = function(id_task) {
-        requestWakeLock();
-        request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
-            progressErrors = 0;
-
-            if (res.completed) {
-                removeProgressBar();
-                return;
-            }
-
-            let progressText = "";
-
-            divInner.style.width = ((res.progress || 0) * 100.0) + '%';
-            divInner.style.background = res.progress ? "" : "transparent";
-
-            if (res.progress > 0) {
-                progressText = ((res.progress || 0) * 100.0).toFixed(0) + '%';
-            }
-
-            if (res.eta) {
-                progressText += " ETA: " + formatTime(res.eta);
-            }
-
-            setTitle(progressText);
-
-            if (res.textinfo && res.textinfo.indexOf("\n") == -1) {
-                progressText = res.textinfo + " " + progressText;
-            }
-
-            divInner.textContent = progressText;
-
-            var elapsedFromStart = (new Date() - dateStart) / 1000;
-
-            if (res.active) wasEverActive = true;
-
-            if (!res.active && wasEverActive) {
-                removeProgressBar();
-                return;
-            }
-
-            if (elapsedFromStart > inactivityTimeout && !res.queued && !res.active) {
-                removeProgressBar();
-                return;
-            }
-
-            if (onProgress) {
-                onProgress(res);
-            }
-
-            setTimeout(() => {
-                funProgress(id_task, res.id_live_preview);
-            }, progressRefreshPeriod(4));
-        }, function() {
-            retryProgress();
-        });
-    };
-
-    var funLivePreview = function(id_task, id_live_preview) {
-        request("./internal/progress", {id_task: id_task, id_live_preview: id_live_preview, live_preview: !document.hidden}, function(res) {
-            livePreviewErrors = 0;
-
-            if (!divProgress) {
-                return;
-            }
-
-            if (res.live_preview && gallery) {
-                var img = new Image();
-                img.onload = function() {
-                    if (!livePreview) {
-                        livePreview = document.createElement('div');
-                        livePreview.className = 'livePreview';
-                        gallery.insertBefore(livePreview, gallery.firstElementChild);
-                    }
-
-                    livePreview.appendChild(img);
-                    if (livePreview.childElementCount > 2) {
-                        livePreview.removeChild(livePreview.firstElementChild);
-                    }
-                };
-                img.src = res.live_preview;
-            }
-
-            setTimeout(() => {
-                funLivePreview(id_task, res.id_live_preview);
-            }, progressRefreshPeriod(8));
-        }, function() {
-            if (!divProgress) return;
-
-            livePreviewErrors += 1;
-            setTimeout(() => {
-                funLivePreview(id_task, id_live_preview);
-            }, Math.min(1000 * livePreviewErrors, 5000));
-        });
-    };
-
-    funProgress(id_task, 0);
-
-    if (gallery) {
-        funLivePreview(id_task, 0);
+    if (subscriber.divProgress && subscriber.divProgress.parentNode) {
+        subscriber.divProgress.parentNode.removeChild(subscriber.divProgress);
     }
 
+    if (subscriber.gallery && subscriber.livePreview && subscriber.livePreview.parentNode) {
+        subscriber.livePreview.parentNode.removeChild(subscriber.livePreview);
+    }
+
+    subscriber.atEnd();
+
+    session.subscribers = session.subscribers.filter(function(item) {
+        return item !== subscriber;
+    });
+
+    if (session.subscribers.length == 0) {
+        stopProgressSession(session);
+    }
+}
+
+function removeAllProgressSubscribers(session) {
+    Array.from(session.subscribers).forEach(function(subscriber) {
+        removeProgressSubscriber(session, subscriber);
+    });
+}
+
+function createProgressSession(id_task) {
+    return {
+        id_task: id_task,
+        subscribers: [],
+        wakeLock: null,
+        progressErrors: 0,
+        livePreviewErrors: 0,
+        progressTimer: null,
+        livePreviewTimer: null,
+        lastLivePreviewId: 0,
+        progressStarted: false,
+        livePreviewStarted: false,
+        stopped: false
+    };
+}
+
+async function requestProgressWakeLock(session) {
+    if (!opts.prevent_screen_sleep_during_generation || session.wakeLock) return;
+    try {
+        session.wakeLock = await navigator.wakeLock.request('screen');
+    } catch (err) {
+        console.error('Wake Lock is not supported.');
+    }
+}
+
+async function releaseProgressWakeLock(session) {
+    if (!opts.prevent_screen_sleep_during_generation || !session.wakeLock) return;
+    try {
+        await session.wakeLock.release();
+        session.wakeLock = null;
+    } catch (err) {
+        console.error('Wake Lock release failed', err);
+    }
+}
+
+function stopProgressSession(session) {
+    if (session.stopped) return;
+
+    session.stopped = true;
+
+    if (session.progressTimer) clearTimeout(session.progressTimer);
+    if (session.livePreviewTimer) clearTimeout(session.livePreviewTimer);
+
+    releaseProgressWakeLock(session);
+    setTitle("");
+    delete progressSessions[session.id_task];
+}
+
+function progressTextFromResponse(res) {
+    var progressText = "";
+
+    if (res.progress > 0) {
+        progressText = ((res.progress || 0) * 100.0).toFixed(0) + '%';
+    }
+
+    if (res.eta) {
+        progressText += " ETA: " + formatTime(res.eta);
+    }
+
+    return progressText;
+}
+
+function updateProgressSubscriber(session, subscriber, res, titleProgressText) {
+    if (subscriber.removed) return;
+
+    var divInner = subscriber.divInner;
+    var progressText = titleProgressText;
+
+    divInner.style.width = ((res.progress || 0) * 100.0) + '%';
+    divInner.style.background = res.progress ? "" : "transparent";
+
+    if (res.textinfo && res.textinfo.indexOf("\n") == -1) {
+        progressText = res.textinfo + " " + progressText;
+    }
+
+    divInner.textContent = progressText;
+
+    if (res.active) subscriber.wasEverActive = true;
+
+    if (!res.active && subscriber.wasEverActive) {
+        removeProgressSubscriber(session, subscriber);
+        return;
+    }
+
+    var elapsedFromStart = (new Date() - subscriber.dateStart) / 1000;
+    if (elapsedFromStart > subscriber.inactivityTimeout && !res.queued && !res.active) {
+        removeProgressSubscriber(session, subscriber);
+        return;
+    }
+
+    if (subscriber.onProgress) {
+        subscriber.onProgress(res);
+    }
+}
+
+function showProgressReconnect(session) {
+    session.subscribers.forEach(function(subscriber) {
+        if (subscriber.removed) return;
+        subscriber.divInner.style.background = "";
+        subscriber.divInner.textContent = "Connection lost. Reconnecting...";
+    });
+}
+
+function updateLivePreviewSubscriber(subscriber, livePreviewData) {
+    if (subscriber.removed || !subscriber.gallery || !livePreviewData) return;
+
+    var img = new Image();
+    img.onload = function() {
+        if (subscriber.removed || !subscriber.gallery) return;
+
+        if (!subscriber.livePreview) {
+            subscriber.livePreview = document.createElement('div');
+            subscriber.livePreview.className = 'livePreview';
+            subscriber.gallery.insertBefore(subscriber.livePreview, subscriber.gallery.firstElementChild);
+        }
+
+        subscriber.livePreview.appendChild(img);
+        if (subscriber.livePreview.childElementCount > 2) {
+            subscriber.livePreview.removeChild(subscriber.livePreview.firstElementChild);
+        }
+    };
+    img.src = livePreviewData;
+}
+
+function sessionHasGallery(session) {
+    return session.subscribers.some(function(subscriber) {
+        return !subscriber.removed && subscriber.gallery;
+    });
+}
+
+function startProgressSessionPolling(session) {
+    if (session.progressStarted) return;
+
+    session.progressStarted = true;
+
+    var pollProgress = function() {
+        if (session.stopped) return;
+
+        requestProgressWakeLock(session);
+        request("./internal/progress", {id_task: session.id_task, live_preview: false}, function(res) {
+            if (session.stopped) return;
+
+            session.progressErrors = 0;
+
+            if (res.completed) {
+                removeAllProgressSubscribers(session);
+                return;
+            }
+
+            var titleProgressText = progressTextFromResponse(res);
+            setTitle(titleProgressText);
+
+            Array.from(session.subscribers).forEach(function(subscriber) {
+                updateProgressSubscriber(session, subscriber, res, titleProgressText);
+            });
+
+            if (session.stopped) return;
+
+            session.progressTimer = setTimeout(pollProgress, progressRefreshPeriod(4));
+        }, function() {
+            if (session.stopped) return;
+
+            session.progressErrors += 1;
+            showProgressReconnect(session);
+            session.progressTimer = setTimeout(pollProgress, Math.min(1000 * session.progressErrors, 5000));
+        });
+    };
+
+    pollProgress();
+}
+
+function startLivePreviewSessionPolling(session) {
+    if (session.livePreviewStarted || !sessionHasGallery(session)) return;
+
+    session.livePreviewStarted = true;
+
+    var pollLivePreview = function() {
+        if (session.stopped) return;
+
+        request("./internal/progress", {id_task: session.id_task, id_live_preview: session.lastLivePreviewId, live_preview: !document.hidden}, function(res) {
+            if (session.stopped) return;
+
+            session.livePreviewErrors = 0;
+            session.lastLivePreviewId = res.id_live_preview;
+
+            if (res.live_preview) {
+                session.subscribers.forEach(function(subscriber) {
+                    updateLivePreviewSubscriber(subscriber, res.live_preview);
+                });
+            }
+
+            session.livePreviewTimer = setTimeout(pollLivePreview, progressRefreshPeriod(8));
+        }, function() {
+            if (session.stopped) return;
+
+            session.livePreviewErrors += 1;
+            session.livePreviewTimer = setTimeout(pollLivePreview, Math.min(1000 * session.livePreviewErrors, 5000));
+        });
+    };
+
+    pollLivePreview();
+}
+
+// starts sending progress requests to "/internal/progress" uri, creating progressbar above progressbarContainer element and
+// preview inside gallery element. Cleans up all created stuff when the task is over and calls atEnd.
+// calls onProgress every time there is a progress update
+function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout = 40) {
+    if (!id_task || !progressbarContainer) return;
+
+    var session = progressSessions[id_task];
+    if (!session) {
+        session = createProgressSession(id_task);
+        progressSessions[id_task] = session;
+    }
+
+    var subscriber = createProgressSubscriber(id_task, progressbarContainer, gallery, atEnd, onProgress, inactivityTimeout);
+    session.subscribers.push(subscriber);
+
+    startProgressSessionPolling(session);
+    startLivePreviewSessionPolling(session);
 }
