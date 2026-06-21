@@ -33,21 +33,40 @@ def walk_files(path, allowed_extensions=None):
         return
 
     if allowed_extensions is not None:
-        allowed_extensions = set(allowed_extensions)
+        allowed_extensions = {ext.lower() for ext in allowed_extensions}
 
-    items = list(os.walk(path, followlinks=True))
-    items = sorted(items, key=lambda x: natural_sort_key(x[0]))
+    visited_dirs = set()
 
-    for root, _, files in items:
+    def directory_key(dirname):
+        try:
+            stat = os.stat(dirname)
+            if stat.st_ino:
+                return "stat", stat.st_dev, stat.st_ino
+        except OSError:
+            pass
+
+        return "path", os.path.normcase(os.path.realpath(dirname))
+
+    for root, dirs, files in os.walk(path, followlinks=True):
+        key = directory_key(root)
+        if key in visited_dirs:
+            dirs[:] = []
+            continue
+        visited_dirs.add(key)
+
+        dirs[:] = sorted(dirs, key=natural_sort_key)
+        for dirname in list(dirs):
+            if directory_key(os.path.join(root, dirname)) in visited_dirs:
+                dirs.remove(dirname)
+
+        if not shared.opts.list_hidden_files and ("/." in root or "\\." in root):
+            dirs[:] = []
+            continue
+
+        if allowed_extensions is not None:
+            files = [filename for filename in files if os.path.splitext(filename)[1].lower() in allowed_extensions]
+
         for filename in sorted(files, key=natural_sort_key):
-            if allowed_extensions is not None:
-                _, ext = os.path.splitext(filename)
-                if ext.lower() not in allowed_extensions:
-                    continue
-
-            if not shared.opts.list_hidden_files and ("/." in root or "\\." in root):
-                continue
-
             yield os.path.join(root, filename)
 
 
