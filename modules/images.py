@@ -77,6 +77,67 @@ class Grid(namedtuple("_Grid", ["tiles", "tile_w", "tile_h", "image_w", "image_h
         return sum(len(row[2]) for row in self.tiles)
 
 
+class GridTile:
+    __slots__ = ("x", "w", "_image", "_box", "_tile")
+
+    def __init__(self, x: int, w: int, image: Image.Image | None = None, box=None, tile: Image.Image | None = None):
+        self.x = x
+        self.w = w
+        self._image = image
+        self._box = box
+        self._tile = tile
+
+    @property
+    def tile(self) -> Image.Image:
+        if self._tile is None:
+            self._tile = self._image.crop(self._box)
+
+        return self._tile
+
+    @tile.setter
+    def tile(self, value: Image.Image):
+        self._tile = value
+        self._image = None
+        self._box = None
+
+    def __len__(self):
+        return 3
+
+    def __iter__(self):
+        yield self.x
+        yield self.w
+        yield self.tile
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            return [self[i] for i in range(*item.indices(len(self)))]
+
+        if item < 0:
+            item += len(self)
+
+        if item == 0:
+            return self.x
+        if item == 1:
+            return self.w
+        if item == 2:
+            return self.tile
+
+        raise IndexError(item)
+
+    def __setitem__(self, item, value):
+        if item < 0:
+            item += len(self)
+
+        if item == 0:
+            self.x = value
+        elif item == 1:
+            self.w = value
+        elif item == 2:
+            self.tile = value
+        else:
+            raise IndexError(item)
+
+
 def split_grid(image: Image.Image, tile_w: int = 512, tile_h: int = 512, overlap: int = 64) -> Grid:
     w, h = image.size
 
@@ -104,41 +165,64 @@ def split_grid(image: Image.Image, tile_w: int = 512, tile_h: int = 512, overlap
             if x + tile_w >= w:
                 x = w - tile_w
 
-            tile = image.crop((x, y, x + tile_w, y + tile_h))
-
-            row_images.append([x, tile_w, tile])
+            row_images.append(GridTile(x, tile_w, image, (x, y, x + tile_w, y + tile_h)))
 
         grid.tiles.append([y, tile_h, row_images])
 
     return grid
 
 
-def combine_grid(grid):
-    def make_mask_image(r):
-        r = r * 255 / grid.overlap
-        r = r.astype(np.uint8)
-        return Image.fromarray(r, 'L')
+@functools.lru_cache(maxsize=128)
+def horizontal_overlap_mask(overlap: int, height: int):
+    r = np.arange(overlap, dtype=np.float32).reshape((1, overlap)).repeat(height, axis=0)
+    r = r * 255 / overlap
+    return Image.fromarray(r.astype(np.uint8), 'L')
 
-    mask_w = make_mask_image(np.arange(grid.overlap, dtype=np.float32).reshape((1, grid.overlap)).repeat(grid.tile_h, axis=0))
-    mask_h = make_mask_image(np.arange(grid.overlap, dtype=np.float32).reshape((grid.overlap, 1)).repeat(grid.image_w, axis=1))
+
+@functools.lru_cache(maxsize=64)
+def vertical_overlap_mask(width: int, overlap: int):
+    r = np.arange(overlap, dtype=np.float32).reshape((overlap, 1)).repeat(width, axis=1)
+    r = r * 255 / overlap
+    return Image.fromarray(r.astype(np.uint8), 'L')
+
+
+def paste_tile_section(target: Image.Image, tile: Image.Image, x: int, y: int, w: int, h: int, overlap: int):
+    if h <= 0:
+        return
+
+    if x == 0 or overlap <= 0:
+        target.paste(tile, (x, y))
+        return
+
+    target.paste(tile.crop((0, 0, overlap, h)), (x, y), mask=horizontal_overlap_mask(overlap, h))
+    target.paste(tile.crop((overlap, 0, w, h)), (x + overlap, y))
+
+
+def combine_grid(grid):
+    if grid.overlap <= 0:
+        combined_image = Image.new("RGB", (grid.image_w, grid.image_h))
+        for y, _h, row in grid.tiles:
+            for x, _w, tile in row:
+                combined_image.paste(tile, (x, y))
+
+        return combined_image
 
     combined_image = Image.new("RGB", (grid.image_w, grid.image_h))
     for y, h, row in grid.tiles:
-        combined_row = Image.new("RGB", (grid.image_w, h))
-        for x, w, tile in row:
-            if x == 0:
-                combined_row.paste(tile, (0, 0))
-                continue
-
-            combined_row.paste(tile.crop((0, 0, grid.overlap, h)), (x, 0), mask=mask_w)
-            combined_row.paste(tile.crop((grid.overlap, 0, w, h)), (x + grid.overlap, 0))
-
         if y == 0:
-            combined_image.paste(combined_row, (0, 0))
+            for x, w, tile in row:
+                paste_tile_section(combined_image, tile, x, 0, w, h, grid.overlap)
             continue
 
-        combined_image.paste(combined_row.crop((0, 0, combined_row.width, grid.overlap)), (0, y), mask=mask_h)
-        combined_image.paste(combined_row.crop((0, grid.overlap, combined_row.width, h)), (0, y + grid.overlap))
+        combined_top = Image.new("RGB", (grid.image_w, grid.overlap))
+        for x, w, tile in row:
+            paste_tile_section(combined_top, tile.crop((0, 0, w, grid.overlap)), x, 0, w, grid.overlap, grid.overlap)
+
+        combined_image.paste(combined_top, (0, y), mask=vertical_overlap_mask(grid.image_w, grid.overlap))
+
+        lower_height = h - grid.overlap
+        for x, w, tile in row:
+            paste_tile_section(combined_image, tile.crop((0, grid.overlap, w, h)), x, y + grid.overlap, w, lower_height, grid.overlap)
 
     return combined_image
 
