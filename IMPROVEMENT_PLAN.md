@@ -34,7 +34,7 @@ This document tracks resource, performance, and reliability improvements for thi
 | 16 | Interrogate text ranking recomputes too much | `modules/interrogate.py` tokenizes and encodes category text repeatedly. Cache tokenized text and category text features by model/device/options to reduce CPU/GPU work. | done |
 | 17 | Tiled upscaling allocates full tensors on GPU | `modules/upscaler_utils.py:tiled_upscale_2()` creates full-size result and weight tensors on the target device. Add a CPU accumulation mode or chunked output path for very large upscale jobs. | done |
 | 18 | Frequent cache clearing can stall generation | `devices.torch_gc()` is called at many generation boundaries and can force device synchronization. Profile call sites and make GC adaptive based on memory pressure and backend. | done |
-| 19 | Model metadata reads can be expensive | Checkpoint, LoRA, and Extra Networks metadata paths read large files or safetensors metadata during refresh. Add async refresh progress, cancellation, and stronger cached metadata invalidation. | backlog |
+| 19 | Model metadata reads can be expensive | Checkpoint, LoRA, and Extra Networks metadata paths read large files or safetensors metadata during refresh. Add async refresh progress, cancellation, and stronger cached metadata invalidation. | done |
 | 20 | UI progress polling has no global coordinator | Multiple pages or restored sessions can start independent progress loops. Centralize progress polling per task and fan out updates to views to reduce duplicate network requests. | backlog |
 
 ## Low

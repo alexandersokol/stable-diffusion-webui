@@ -1,4 +1,7 @@
+import os
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from modules import cache
@@ -7,11 +10,13 @@ from modules import cache
 def use_temp_cache_dir():
     original_cache_dir = cache.cache_dir
     original_caches = cache.caches
+    original_entry_locks = cache.cache_entry_locks
     original_last_cleanup = cache.cache_last_cleanup_time
     temp_dir = tempfile.TemporaryDirectory()
 
     cache.cache_dir = temp_dir.name
     cache.caches = {}
+    cache.cache_entry_locks = {}
     cache.cache_last_cleanup_time = 0
 
     def restore():
@@ -19,6 +24,7 @@ def use_temp_cache_dir():
             cache_obj.close()
         cache.cache_dir = original_cache_dir
         cache.caches = original_caches
+        cache.cache_entry_locks = original_entry_locks
         cache.cache_last_cleanup_time = original_last_cleanup
         temp_dir.cleanup()
 
@@ -106,6 +112,82 @@ def test_cached_data_for_file_runs_cleanup_after_new_write():
         assert value == {"ok": True}
         assert cached_value == {"ok": True}
         assert cleanup_calls == ["cleanup"]
+    finally:
+        cache.cleanup_cache_if_needed = original_cleanup_cache_if_needed
+        restore()
+
+
+def test_cached_data_for_file_invalidates_when_size_changes_with_same_mtime():
+    temp_cache_dir, restore = use_temp_cache_dir()
+    original_cleanup_cache_if_needed = cache.cleanup_cache_if_needed
+
+    try:
+        source_file = temp_cache_dir / "source.txt"
+        source_file.write_text("old", encoding="utf8")
+        original_mtime = source_file.stat().st_mtime
+        cache.cleanup_cache_if_needed = lambda: None
+
+        first = cache.cached_data_for_file("metadata", "source", str(source_file), lambda: {"value": "old"})
+
+        source_file.write_text("new content", encoding="utf8")
+        os.utime(source_file, (original_mtime, original_mtime))
+        second = cache.cached_data_for_file("metadata", "source", str(source_file), lambda: {"value": "new"})
+
+        assert first == {"value": "old"}
+        assert second == {"value": "new"}
+    finally:
+        cache.cleanup_cache_if_needed = original_cleanup_cache_if_needed
+        restore()
+
+
+def test_cached_data_for_file_accepts_legacy_mtime_only_entry():
+    temp_cache_dir, restore = use_temp_cache_dir()
+
+    try:
+        source_file = temp_cache_dir / "source.txt"
+        source_file.write_text("content", encoding="utf8")
+        metadata_cache = cache.cache("metadata")
+        metadata_cache["source"] = {"mtime": source_file.stat().st_mtime + 1, "value": {"ok": True}}
+
+        value = cache.cached_data_for_file("metadata", "source", str(source_file), lambda: {"ok": False})
+
+        assert value == {"ok": True}
+    finally:
+        restore()
+
+
+def test_cached_data_for_file_deduplicates_concurrent_misses():
+    temp_cache_dir, restore = use_temp_cache_dir()
+    original_cleanup_cache_if_needed = cache.cleanup_cache_if_needed
+    call_count = 0
+    call_lock = threading.Lock()
+    start_barrier = threading.Barrier(4)
+    results = []
+
+    def read_metadata():
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        time.sleep(0.05)
+        return {"value": "computed"}
+
+    def worker(source_file):
+        start_barrier.wait()
+        results.append(cache.cached_data_for_file("metadata", "source", str(source_file), read_metadata))
+
+    try:
+        source_file = temp_cache_dir / "source.txt"
+        source_file.write_text("content", encoding="utf8")
+        cache.cleanup_cache_if_needed = lambda: None
+        threads = [threading.Thread(target=worker, args=(source_file,)) for _ in range(4)]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert call_count == 1
+        assert results == [{"value": "computed"}] * 4
     finally:
         cache.cleanup_cache_if_needed = original_cleanup_cache_if_needed
         restore()

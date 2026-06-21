@@ -14,6 +14,7 @@ cache_dir = os.environ.get('SD_WEBUI_CACHE_DIR', os.path.join(data_path, "cache"
 caches = {}
 cache_lock = threading.RLock()
 cache_cleanup_lock = threading.RLock()
+cache_entry_locks = {}
 cache_last_cleanup_time = 0
 
 CACHE_SUBSECTION_SIZE_LIMIT = 2**32  # 4 GB, culling oldest first
@@ -218,6 +219,40 @@ def cleanup_cache_report():
     )
 
 
+def file_signature(filename):
+    stat = os.stat(filename)
+    return {
+        "mtime": stat.st_mtime,
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+    }
+
+
+def cached_file_entry_is_fresh(entry, signature):
+    if not entry:
+        return False
+
+    if "mtime_ns" in entry or "size" in entry:
+        return (
+            entry.get("mtime_ns") == signature["mtime_ns"] and
+            entry.get("size") == signature["size"]
+        )
+
+    return signature["mtime"] <= entry.get("mtime", 0)
+
+
+def cache_entry_lock(subsection, title, filename):
+    key = (subsection, title, os.path.abspath(filename))
+
+    with cache_lock:
+        lock = cache_entry_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            cache_entry_locks[key] = lock
+
+        return lock
+
+
 def convert_old_cached_data():
     try:
         with open(cache_filename, "r", encoding="utf8") as file:
@@ -292,23 +327,33 @@ def cached_data_for_file(subsection, title, filename, func):
     """
 
     existing_cache = cache(subsection)
-    ondisk_mtime = os.path.getmtime(filename)
+    signature = file_signature(filename)
 
-    entry = existing_cache.get(title)
-    if entry:
-        cached_mtime = entry.get("mtime", 0)
-        if ondisk_mtime > cached_mtime:
-            entry = None
+    def get_fresh_entry():
+        entry = existing_cache.get(title)
+        if cached_file_entry_is_fresh(entry, signature) and 'value' in entry:
+            return entry
 
-    if not entry or 'value' not in entry:
+        return None
+
+    entry = get_fresh_entry()
+    if entry is not None:
+        return entry['value']
+
+    with cache_entry_lock(subsection, title, filename):
+        signature = file_signature(filename)
+        entry = get_fresh_entry()
+        if entry is not None:
+            return entry['value']
+
         value = func()
         if value is None:
             return None
 
-        entry = {'mtime': ondisk_mtime, 'value': value}
+        entry = {**signature, 'value': value}
         existing_cache[title] = entry
 
         dump_cache()
         cleanup_cache_if_needed()
 
-    return entry['value']
+        return entry['value']
