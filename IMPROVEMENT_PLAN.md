@@ -45,5 +45,5 @@ This document tracks resource, performance, and reliability improvements for thi
 | 22 | Profiling output can be very large | Torch profiler settings can create hundreds of MB per run. Add rotation, explicit size warnings, and a cleanup button for profiling traces. | done |
 | 23 | Temp theme/cache directories lack UI cleanup | `tmp/gradio_themes`, moved corrupt config/cache files, and other auxiliary files can accumulate. Add a maintenance action that reports and cleans known safe temporary locations. | done |
 | 24 | Console progress overhead is always user-managed | `multiple_tqdm` and tiled upscale progress bars can add overhead in long runs. Add non-disabling refresh throttling and show the current image count in generation progress. | done |
-| 25 | Image save sidecar logs can grow forever | `log.csv` and optional `.txt` infotext sidecars have no retention or size visibility. Add log rotation and output folder usage summaries. | backlog |
+| 25 | Image save sidecar logs can grow forever | `log.csv` and optional `.txt` infotext sidecars have no retention or size visibility. Add log rotation and output folder usage summaries. | done |
 | 26 | API image responses duplicate memory | API encode paths convert generated PIL images into in-memory base64 responses. Add optional file-reference responses or streaming for large batches. | backlog |

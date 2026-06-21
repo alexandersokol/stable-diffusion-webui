@@ -65,6 +65,8 @@ options_templates.update(options_section(('saving-images', "Saving images/grids"
     "use_upscaler_name_as_suffix": OptionInfo(False, "Use upscaler name as filename suffix in the extras tab"),
     "save_selected_only": OptionInfo(True, "When using 'Save' button, only save a single selected image"),
     "save_write_log_csv": OptionInfo(True, "Write log.csv when saving images using 'Save' button"),
+    "save_log_max_size_mb": OptionInfo(10.0, "Maximum Save button log.csv size, MB", gr.Number, {"precision": 1}).info("0 disables log rotation"),
+    "save_log_backup_count": OptionInfo(5, "Save button log.csv backups to keep", gr.Number, {"precision": 0}).info("0 keeps no backups and starts a fresh log when the limit is reached"),
     "save_init_img": OptionInfo(False, "Save init images when using img2img"),
 
     "temp_dir":  OptionInfo("", "Directory for temporary images; leave empty for default"),

@@ -7,7 +7,7 @@ from contextlib import nullcontext
 
 import gradio as gr
 
-from modules import call_queue, shared, ui_tempdir, util
+from modules import call_queue, output_storage, shared, ui_tempdir, util
 from modules.infotext_utils import image_from_url_text
 import modules.images
 from modules.ui_components import ToolButton
@@ -104,8 +104,10 @@ def save_files(js_data, images, do_make_zip, index):
 
     # NOTE: ensure csv integrity when fields are added by
     # updating headers and padding with delimiters where needed
-    if shared.opts.save_write_log_csv and os.path.exists(logfile_path):
-        update_logfile(logfile_path, fields)
+    if shared.opts.save_write_log_csv:
+        output_storage.rotate_log_file_if_needed(logfile_path)
+        if os.path.exists(logfile_path):
+            update_logfile(logfile_path, fields)
 
     with (open(logfile_path, "a", encoding="utf8", newline='') if shared.opts.save_write_log_csv else nullcontext()) as file:
         if file:

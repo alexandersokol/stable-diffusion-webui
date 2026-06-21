@@ -1,6 +1,6 @@
 import gradio as gr
 
-from modules import ui_common, shared, script_callbacks, scripts, sd_models, sysinfo, timer, shared_items, cache, profiling, maintenance
+from modules import ui_common, shared, script_callbacks, scripts, sd_models, sysinfo, timer, shared_items, cache, profiling, maintenance, output_storage
 from modules.call_queue import wrap_gradio_call_no_job
 from modules.options import options_section
 from modules.shared import opts
@@ -194,6 +194,7 @@ class UiSettings:
                         cleanup_disk_cache = gr.Button(value='Cleanup disk cache', elem_id="settings_cleanup_disk_cache")
                         cleanup_profiling_traces = gr.Button(value='Cleanup profiling traces', elem_id="settings_cleanup_profiling_traces")
                         cleanup_auxiliary_temp_files = gr.Button(value='Cleanup auxiliary temp files', elem_id="settings_cleanup_auxiliary_temp_files")
+                        report_output_storage = gr.Button(value='Report output storage usage', elem_id="settings_report_output_storage")
 
                 with gr.TabItem("Licenses", id="licenses", elem_id="settings_tab_licenses"):
                     gr.HTML(shared.html("licenses.html"), elem_id="licenses")
@@ -303,6 +304,12 @@ class UiSettings:
 
             cleanup_auxiliary_temp_files.click(
                 fn=maintenance.cleanup_auxiliary_temp_files_report,
+                inputs=[],
+                outputs=[self.result],
+            )
+
+            report_output_storage.click(
+                fn=output_storage.output_storage_report,
                 inputs=[],
                 outputs=[self.result],
             )
