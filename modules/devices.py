@@ -1,5 +1,6 @@
 import sys
 import contextlib
+import time
 from functools import lru_cache
 
 import torch
@@ -10,6 +11,73 @@ if sys.platform == "darwin":
 
 if shared.cmd_opts.use_ipex:
     from modules import xpu_specific
+
+
+default_torch_gc_min_interval = 2.0
+default_torch_gc_cuda_free_memory_threshold = 0.10
+default_torch_gc_cuda_reserved_memory_threshold = 0.25
+torch_gc_last_run = {}
+
+
+def get_torch_gc_min_interval():
+    return max(0.0, float(getattr(shared.opts, "torch_gc_min_interval", default_torch_gc_min_interval)))
+
+
+def get_torch_gc_cuda_free_memory_threshold():
+    return max(0.0, float(getattr(shared.opts, "torch_gc_cuda_free_memory_threshold", default_torch_gc_cuda_free_memory_threshold)))
+
+
+def get_torch_gc_cuda_reserved_memory_threshold():
+    return max(0.0, float(getattr(shared.opts, "torch_gc_cuda_reserved_memory_threshold", default_torch_gc_cuda_reserved_memory_threshold)))
+
+
+def torch_gc_recently_ran(backend, now=None):
+    min_interval = get_torch_gc_min_interval()
+
+    if min_interval <= 0:
+        return False
+
+    if now is None:
+        now = time.monotonic()
+
+    last_run = torch_gc_last_run.get(backend)
+    return last_run is not None and now - last_run < min_interval
+
+
+def record_torch_gc_run(backend, now=None):
+    torch_gc_last_run[backend] = time.monotonic() if now is None else now
+
+
+def cuda_memory_pressure():
+    free_threshold = get_torch_gc_cuda_free_memory_threshold()
+    reserved_threshold = get_torch_gc_cuda_reserved_memory_threshold()
+
+    if free_threshold <= 0 and reserved_threshold <= 0:
+        return False
+
+    try:
+        free, total = torch.cuda.mem_get_info()
+        reserved = torch.cuda.memory_reserved()
+        allocated = torch.cuda.memory_allocated()
+    except Exception:
+        return False
+
+    if total <= 0:
+        return False
+
+    if free_threshold > 0 and free / total <= free_threshold:
+        return True
+
+    cached = max(0, reserved - allocated)
+
+    return reserved_threshold > 0 and cached / total >= reserved_threshold
+
+
+def should_run_torch_gc(backend, *, force=False, memory_pressure=False, now=None):
+    if force or memory_pressure:
+        return True
+
+    return not torch_gc_recently_ran(backend, now=now)
 
 
 def has_xpu() -> bool:
@@ -74,22 +142,29 @@ def get_device_for(task):
     return get_optimal_device()
 
 
-def torch_gc():
+def torch_gc(force=False):
+    now = time.monotonic()
 
     if torch.cuda.is_available():
-        with torch.cuda.device(get_cuda_device_string()):
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
+        cuda_pressure = cuda_memory_pressure()
+        if should_run_torch_gc("cuda", force=force, memory_pressure=cuda_pressure, now=now):
+            with torch.cuda.device(get_cuda_device_string()):
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            record_torch_gc_run("cuda", now=now)
 
-    if has_mps():
+    if has_mps() and should_run_torch_gc("mps", force=force, now=now):
         mac_specific.torch_mps_gc()
+        record_torch_gc_run("mps", now=now)
 
-    if has_xpu():
+    if has_xpu() and should_run_torch_gc("xpu", force=force, now=now):
         xpu_specific.torch_xpu_gc()
+        record_torch_gc_run("xpu", now=now)
 
-    if npu_specific.has_npu:
+    if npu_specific.has_npu and should_run_torch_gc("npu", force=force, now=now):
         torch_npu_set_device()
         npu_specific.torch_npu_gc()
+        record_torch_gc_run("npu", now=now)
 
 
 def torch_npu_set_device():
