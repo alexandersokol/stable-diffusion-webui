@@ -141,7 +141,7 @@ options_templates.update(options_section(('profiler', "Profiler", "system"), {
     "profiling_explanation": OptionHTML("""
 Those settings allow you to enable torch profiler when generating pictures.
 Profiling allows you to see which code uses how much of computer's resources during generation.
-Each generation writes its own profile to one file, overwriting previous.
+Each generation writes its own profile to one file. Existing profiles are rotated and old profiles are cleaned up using the limits below.
 The file can be viewed in <a href="chrome:tracing">Chrome</a>, or on a <a href="https://ui.perfetto.dev/">Perfetto</a> web site.
 Warning: writing profile can take a lot of time, up to 30 seconds, and the file itelf can be around 500MB in size.
 """),
@@ -151,6 +151,8 @@ Warning: writing profile can take a lot of time, up to 30 seconds, and the file 
     "profiling_profile_memory": OptionInfo(True, "Profile memory"),
     "profiling_with_stack": OptionInfo(True, "Include python stack"),
     "profiling_filename": OptionInfo("trace.json", "Profile filename"),
+    "profiling_max_trace_files": OptionInfo(5, "Maximum profiler trace files to keep", gr.Number, {"precision": 0}).info("0 disables the file count limit"),
+    "profiling_max_total_size_mb": OptionInfo(2048, "Maximum total profiler trace size, MB", gr.Number, {"precision": 0}).info("0 disables the total size limit"),
 }))
 
 options_templates.update(options_section(('API', "API", "system"), {
