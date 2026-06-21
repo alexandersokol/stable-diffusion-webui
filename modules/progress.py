@@ -206,8 +206,8 @@ def progressapi(req: ProgressRequest):
 
     progress = min(progress, 1)
 
-    elapsed_since_start = time.time() - shared.state.time_start
-    predicted_duration = elapsed_since_start / progress if progress > 0 else None
+    elapsed_since_start = time.time() - shared.state.time_start if shared.state.time_start is not None else None
+    predicted_duration = elapsed_since_start / progress if elapsed_since_start is not None and progress > 0 else None
     eta = predicted_duration - elapsed_since_start if predicted_duration is not None else None
 
     live_preview = None

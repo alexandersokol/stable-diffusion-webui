@@ -49,6 +49,25 @@ def test_progress_task_lifecycle_is_visible_through_locked_snapshots():
     assert completed.completed is True
 
 
+def test_progress_active_task_without_start_time_returns_valid_response():
+    reset_progress_state()
+    task_id = "task(txt2img-AAAAAAA)"
+
+    progress.start_task(task_id)
+    shared.state.time_start = None
+    shared.state.job_count = 1
+    shared.state.job_no = 0
+    shared.state.sampling_steps = 1
+    shared.state.sampling_step = 0
+
+    active = progress.progressapi(progress.ProgressRequest(id_task=task_id, live_preview=False))
+
+    assert active.active is True
+    assert active.progress == 0
+    assert active.eta is None
+    assert active.id_task == task_id
+
+
 def test_record_results_keeps_only_limit():
     reset_progress_state()
 
