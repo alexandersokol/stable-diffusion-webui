@@ -113,12 +113,13 @@ def tiled_upscale_2(
     stride = tile_size - tile_overlap
     h_idx_list = list(range(0, h - tile_size, stride)) + [h - tile_size]
     w_idx_list = list(range(0, w - tile_size, stride)) + [w - tile_size]
+    accumulation_device = torch.device("cpu")
     result = torch.zeros(
         b,
         c,
         h * scale,
         w * scale,
-        device=device,
+        device=accumulation_device,
         dtype=img.dtype,
     )
     weights = torch.zeros_like(result)
@@ -140,6 +141,7 @@ def tiled_upscale_2(
                 ].to(device=device)
 
                 out_patch = model(in_patch)
+                out_patch = out_patch.detach().to(device=accumulation_device, dtype=result.dtype)
 
                 result[
                     ...,
@@ -147,13 +149,11 @@ def tiled_upscale_2(
                     w_idx * scale : (w_idx + tile_size) * scale,
                 ].add_(out_patch)
 
-                out_patch_mask = torch.ones_like(out_patch)
-
                 weights[
                     ...,
                     h_idx * scale : (h_idx + tile_size) * scale,
                     w_idx * scale : (w_idx + tile_size) * scale,
-                ].add_(out_patch_mask)
+                ].add_(1)
 
                 pbar.update(1)
 
