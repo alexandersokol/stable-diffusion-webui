@@ -114,7 +114,7 @@ def fetch_file(filename: str = ""):
 def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
     from starlette.responses import Response
 
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+    page = find_page(page)
     if page is None:
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -136,10 +136,14 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
         raise ValueError(f"File cannot be fetched: {item}. Failed to load cover image.") from err
 
 
+def find_page(page: str = ""):
+    return next(iter([x for x in extra_pages if x.name == page or x.extra_networks_tabname == page]), None)
+
+
 def get_metadata(page: str = "", item: str = ""):
     from starlette.responses import JSONResponse
 
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+    page = find_page(page)
     if page is None:
         return JSONResponse({})
 
@@ -155,14 +159,20 @@ def get_metadata(page: str = "", item: str = ""):
 def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     from starlette.responses import JSONResponse
 
-    page = next(iter([x for x in extra_pages if x.name == page]), None)
+    page = find_page(page)
+    if page is None:
+        return JSONResponse({"html": ""})
 
     try:
         item = page.create_item(name, enable_filter=False)
-        page.items[name] = item
+        if item is not None:
+            page.items[name] = item
     except Exception as e:
         errors.display(e, "creating item for extra network")
         item = page.items.get(name)
+
+    if item is None:
+        return JSONResponse({"html": ""})
 
     page.read_user_metadata(item, use_cache=False)
     item_html = page.create_item_html(tabname, item, shared.html("extra-networks-card.html"))
@@ -170,11 +180,40 @@ def get_single_card(page: str = "", tabname: str = "", name: str = ""):
     return JSONResponse({"html": item_html})
 
 
+def get_page_cards(page: str = "", tabname: str = "", offset: int = 0, limit: int = 0):
+    from starlette.responses import JSONResponse
+
+    page = find_page(page)
+    if page is None:
+        return JSONResponse({"html": "", "offset": offset, "next_offset": offset, "total": 0, "complete": True})
+
+    try:
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        offset = 0
+
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 0
+
+    html_cards, next_offset, total = page.create_card_batch_html(tabname, offset=offset, limit=limit, include_load_more=True)
+
+    return JSONResponse({
+        "html": html_cards,
+        "offset": offset,
+        "next_offset": next_offset,
+        "total": total,
+        "complete": next_offset >= total,
+    })
+
+
 def add_pages_to_demo(app):
     app.add_api_route("/sd_extra_networks/thumb", fetch_file, methods=["GET"])
     app.add_api_route("/sd_extra_networks/cover-images", fetch_cover_images, methods=["GET"])
     app.add_api_route("/sd_extra_networks/metadata", get_metadata, methods=["GET"])
     app.add_api_route("/sd_extra_networks/get-single-card", get_single_card, methods=["GET"])
+    app.add_api_route("/sd_extra_networks/page-cards", get_page_cards, methods=["GET"])
 
 
 def quote_js(s):
@@ -549,6 +588,52 @@ class ExtraNetworksPage:
 
         return subdirs_html
 
+    def card_page_size(self):
+        try:
+            return max(0, int(shared.opts.extra_networks_card_page_size))
+        except (TypeError, ValueError):
+            return 100
+
+    def create_load_more_html(self, tabname: str, next_offset: int, total: int) -> str:
+        if next_offset >= total:
+            return ""
+
+        remaining = total - next_offset
+        return (
+            f"<button class='lg secondary gradio-button custom-button extra-networks-load-more' "
+            f"data-page='{html.escape(self.extra_networks_tabname)}' "
+            f"data-tabname='{html.escape(tabname)}' "
+            f"data-offset='{next_offset}' "
+            f"data-limit='{self.card_page_size()}' "
+            f"data-total='{total}' "
+            f"onclick='extraNetworksLoadMoreCards(event)'>"
+            f"Load more ({remaining})"
+            f"</button>"
+        )
+
+    def create_card_batch_html(self, tabname: str, offset=0, limit=None, include_load_more=False) -> tuple[str, int, int]:
+        items = list(self.items.values())
+        total = len(items)
+
+        if limit is None:
+            limit = self.card_page_size()
+
+        if limit <= 0:
+            end = total
+        else:
+            end = min(total, offset + limit)
+
+        res = []
+        for item in items[offset:end]:
+            if "user_metadata" not in item:
+                self.read_user_metadata(item)
+            res.append(self.create_item_html(tabname, item, self.card_tpl))
+
+        if include_load_more:
+            res.append(self.create_load_more_html(tabname, end, total))
+
+        return "".join(res), end, total
+
     def create_card_view_html(self, tabname: str, *, none_message) -> str:
         """Generates HTML for the network Card View section for a tab.
 
@@ -562,15 +647,13 @@ class ExtraNetworksPage:
         Returns:
             HTML formatted string.
         """
-        res = []
-        for item in self.items.values():
-            res.append(self.create_item_html(tabname, item, self.card_tpl))
+        res, next_offset, total = self.create_card_batch_html(tabname, include_load_more=True)
 
-        if not res:
+        if total == 0:
             dirs = "".join([f"<li>{x}</li>" for x in self.allowed_directories_for_previews()])
-            res = [none_message or shared.html("extra-networks-no-cards.html").format(dirs=dirs)]
+            res = none_message or shared.html("extra-networks-no-cards.html").format(dirs=dirs)
 
-        return "".join(res)
+        return res
 
     def create_html(self, tabname, *, empty=False):
         """Generates an HTML string for the current pane.
@@ -595,9 +678,6 @@ class ExtraNetworksPage:
             metadata = item.get("metadata")
             if metadata:
                 self.metadata[item["name"]] = metadata
-
-            if "user_metadata" not in item:
-                self.read_user_metadata(item)
 
         show_tree = shared.opts.extra_networks_tree_view_default_enabled
 

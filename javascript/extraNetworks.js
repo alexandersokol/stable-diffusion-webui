@@ -109,6 +109,12 @@ function setupExtraNetworksForTab(tabname) {
         };
 
         search.addEventListener("input", function() {
+            if (extraNetworksLoadAllCards(tabname_full, function() {
+                applyFilter(true);
+            })) {
+                return;
+            }
+
             applyFilter();
         });
         applySort();
@@ -407,6 +413,12 @@ function extraNetworksControlSortOnClick(event, tabname, extra_networks_tabname)
 
     self.classList.add('extra-network-control--enabled');
 
+    if (extraNetworksLoadAllCards(tabname + "_" + extra_networks_tabname, function() {
+        applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+    })) {
+        return;
+    }
+
     applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
 }
 
@@ -428,6 +440,12 @@ function extraNetworksControlSortDirOnClick(event, tabname, extra_networks_tabna
         event.currentTarget.dataset.sortdir = "Ascending";
         event.currentTarget.setAttribute("title", "Sort ascending");
     }
+    if (extraNetworksLoadAllCards(tabname + "_" + extra_networks_tabname, function() {
+        applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
+    })) {
+        return;
+    }
+
     applyExtraNetworkSort(tabname + "_" + extra_networks_tabname);
 }
 
@@ -594,15 +612,69 @@ function requestGet(url, data, handler, errorHandler) {
                     handler(js);
                 } catch (error) {
                     console.error(error);
-                    errorHandler();
+                    if (errorHandler) errorHandler();
                 }
             } else {
-                errorHandler();
+                if (errorHandler) errorHandler();
             }
         }
     };
     var js = JSON.stringify(data);
     xhr.send(js);
+}
+
+function extraNetworksLoadAllCards(tabname_full, callback) {
+    var button = gradioApp().querySelector("#" + tabname_full + "_cards .extra-networks-load-more");
+    if (!button) return false;
+
+    extraNetworksLoadMoreCards(button, true, callback);
+    return true;
+}
+
+function extraNetworksLoadMoreCards(eventOrButton, loadAll, callback) {
+    var event = eventOrButton && eventOrButton.currentTarget ? eventOrButton : null;
+    var button = event ? event.currentTarget : eventOrButton;
+
+    if (!button || button.dataset.loading == "true") return;
+
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+
+    var page = button.dataset.page;
+    var tabname = button.dataset.tabname;
+    var offset = parseInt(button.dataset.offset || "0");
+    var limit = parseInt(button.dataset.limit || "0");
+    var cards = gradioApp().getElementById(tabname + "_" + page + "_cards");
+
+    if (!cards) return;
+
+    button.dataset.loading = "true";
+    button.textContent = "Loading...";
+
+    requestGet("./sd_extra_networks/page-cards", {page: page, tabname: tabname, offset: offset, limit: limit}, function(data) {
+        var wrapper = document.createElement("DIV");
+        wrapper.innerHTML = data.html || "";
+
+        button.remove();
+        while (wrapper.firstElementChild) {
+            cards.appendChild(wrapper.firstElementChild);
+        }
+
+        if (loadAll && data && !data.complete) {
+            var nextButton = cards.querySelector(".extra-networks-load-more");
+            if (nextButton) {
+                extraNetworksLoadMoreCards(nextButton, true, callback);
+                return;
+            }
+        }
+
+        if (callback) callback();
+    }, function() {
+        button.dataset.loading = "false";
+        button.textContent = "Load more";
+    });
 }
 
 function extraNetworksCopyCardPath(event) {

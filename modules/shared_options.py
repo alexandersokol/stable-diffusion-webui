@@ -281,6 +281,7 @@ options_templates.update(options_section(('extra_networks', "Extra Networks", "s
     "extra_networks_default_multiplier": OptionInfo(1.0, "Default multiplier for extra networks", gr.Slider, {"minimum": 0.0, "maximum": 2.0, "step": 0.01}),
     "extra_networks_card_width": OptionInfo(0, "Card width for Extra Networks").info("in pixels"),
     "extra_networks_card_height": OptionInfo(0, "Card height for Extra Networks").info("in pixels"),
+    "extra_networks_card_page_size": OptionInfo(100, "Extra Networks cards to render per batch", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 50}).info("0 renders all cards at once"),
     "extra_networks_card_text_scale": OptionInfo(1.0, "Card text scale", gr.Slider, {"minimum": 0.0, "maximum": 2.0, "step": 0.01}).info("1 = original size"),
     "extra_networks_card_show_desc": OptionInfo(True, "Show description on card"),
     "extra_networks_card_description_is_html": OptionInfo(False, "Treat card description as HTML"),
