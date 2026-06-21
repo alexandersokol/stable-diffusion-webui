@@ -1,6 +1,6 @@
 import gradio as gr
 
-from modules import ui_common, shared, script_callbacks, scripts, sd_models, sysinfo, timer, shared_items
+from modules import ui_common, shared, script_callbacks, scripts, sd_models, sysinfo, timer, shared_items, cache
 from modules.call_queue import wrap_gradio_call_no_job
 from modules.options import options_section
 from modules.shared import opts
@@ -190,6 +190,8 @@ class UiSettings:
                     with gr.Row():
                         calculate_all_checkpoint_hash = gr.Button(value='Calculate hash for all checkpoint', elem_id="calculate_all_checkpoint_hash")
                         calculate_all_checkpoint_hash_threads = gr.Number(value=1, label="Number of parallel calculations", elem_id="calculate_all_checkpoint_hash_threads", precision=0, minimum=1)
+                    with gr.Row():
+                        cleanup_disk_cache = gr.Button(value='Cleanup disk cache', elem_id="settings_cleanup_disk_cache")
 
                 with gr.TabItem("Licenses", id="licenses", elem_id="settings_tab_licenses"):
                     gr.HTML(shared.html("licenses.html"), elem_id="licenses")
@@ -283,6 +285,12 @@ class UiSettings:
             calculate_all_checkpoint_hash.click(
                 fn=calculate_all_checkpoint_hash_fn,
                 inputs=[calculate_all_checkpoint_hash_threads],
+            )
+
+            cleanup_disk_cache.click(
+                fn=cache.cleanup_cache_report,
+                inputs=[],
+                outputs=[self.result],
             )
 
         self.interface = settings_interface

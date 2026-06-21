@@ -29,7 +29,7 @@ This document tracks resource, performance, and reliability improvements for thi
 | Id | name | description | status |
 | --- | --- | --- | --- |
 | 13 | Output directory scans are O(n) | `modules/images.py:get_next_sequence_number()` scans the whole output directory for every save. Cache sequence counters per directory/basename and resync safely when files appear externally. | done |
-| 14 | Disk cache aggregate can grow large | `modules/cache.py` sets a 4 GB limit per subsection, so total cache size can exceed expectations. Add global cache budget, cleanup UI, and periodic culling across subsections. | backlog |
+| 14 | Disk cache aggregate can grow large | `modules/cache.py` sets a 4 GB limit per subsection, so total cache size can exceed expectations. Add global cache budget, cleanup UI, and periodic culling across subsections. | done |
 | 15 | Extra Networks HTML generation scales poorly | `modules/ui_extra_networks.py` loads metadata and creates card HTML for all items at once. Add pagination or lazy card rendering for large checkpoint/embedding libraries. | backlog |
 | 16 | Interrogate text ranking recomputes too much | `modules/interrogate.py` tokenizes and encodes category text repeatedly. Cache tokenized text and category text features by model/device/options to reduce CPU/GPU work. | backlog |
 | 17 | Tiled upscaling allocates full tensors on GPU | `modules/upscaler_utils.py:tiled_upscale_2()` creates full-size result and weight tensors on the target device. Add a CPU accumulation mode or chunked output path for very large upscale jobs. | backlog |

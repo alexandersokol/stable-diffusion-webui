@@ -123,6 +123,8 @@ options_templates.update(options_section(('system', "System", "system"), {
     "samples_log_stdout": OptionInfo(False, "Always print all generation info to standard output"),
     "multiple_tqdm": OptionInfo(True, "Add a second progress bar to the console that shows progress for an entire job."),
     "enable_upscale_progressbar": OptionInfo(True, "Show a progress bar in the console for tiled upscaling."),
+    "disk_cache_max_size_mb": OptionInfo(4096, "Maximum disk cache size, MB", gr.Slider, {"minimum": 0, "maximum": 65536, "step": 256}).info("0 disables global disk cache cleanup"),
+    "disk_cache_cleanup_interval": OptionInfo(60, "Disk cache cleanup interval, seconds", gr.Number, {"precision": 0}).info("minimum time between automatic cleanup checks"),
     "print_hypernet_extra": OptionInfo(False, "Print extra hypernetwork information to console."),
     "list_hidden_files": OptionInfo(True, "Load models/files in hidden directories").info("directory is hidden if its name starts with \".\""),
     "disable_mmap_load_safetensors": OptionInfo(False, "Disable memmapping for loading .safetensors files.").info("fixes very slow loading speed in some cases"),
