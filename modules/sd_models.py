@@ -24,6 +24,8 @@ model_path = os.path.abspath(os.path.join(paths.models_path, model_dir))
 checkpoints_list = {}
 checkpoint_aliases = {}
 checkpoint_alisases = checkpoint_aliases  # for compatibility with old name
+checkpoint_title_search_index = []
+checkpoint_title_search_index_dirty = False
 checkpoints_loaded = collections.OrderedDict()
 
 
@@ -103,6 +105,7 @@ class CheckpointInfo:
         checkpoints_list[self.title] = self
         for id in self.ids:
             checkpoint_aliases[id] = self
+        mark_checkpoint_title_search_index_dirty()
 
     def calculate_shorthash(self):
         self.sha256 = hashes.sha256(self.filename, f"checkpoint/{self.name}")
@@ -150,9 +153,36 @@ def checkpoint_tiles(use_short=False):
     return [x.short_title if use_short else x.title for x in checkpoints_list.values()]
 
 
+def mark_checkpoint_title_search_index_dirty():
+    global checkpoint_title_search_index_dirty
+    checkpoint_title_search_index_dirty = True
+
+
+def rebuild_checkpoint_title_search_index():
+    global checkpoint_title_search_index, checkpoint_title_search_index_dirty
+
+    checkpoint_title_search_index = sorted(
+        (len(info.title), info.title, info)
+        for info in checkpoints_list.values()
+    )
+    checkpoint_title_search_index_dirty = False
+
+
+def checkpoint_title_search_index_matches(search_string):
+    if checkpoint_title_search_index_dirty:
+        rebuild_checkpoint_title_search_index()
+
+    for _, title, info in checkpoint_title_search_index:
+        if search_string in title:
+            return info
+
+    return None
+
+
 def list_models():
     checkpoints_list.clear()
     checkpoint_aliases.clear()
+    mark_checkpoint_title_search_index_dirty()
 
     cmd_ckpt = shared.cmd_opts.ckpt
     if shared.cmd_opts.no_download_sd_model or cmd_ckpt != shared.sd_model_file or os.path.exists(cmd_ckpt):
@@ -176,6 +206,8 @@ def list_models():
         checkpoint_info = CheckpointInfo(filename)
         checkpoint_info.register()
 
+    rebuild_checkpoint_title_search_index()
+
 
 re_strip_checksum = re.compile(r"\s*\[[^]]+]\s*$")
 
@@ -188,14 +220,14 @@ def get_closet_checkpoint_match(search_string):
     if checkpoint_info is not None:
         return checkpoint_info
 
-    found = sorted([info for info in checkpoints_list.values() if search_string in info.title], key=lambda x: len(x.title))
-    if found:
-        return found[0]
+    checkpoint_info = checkpoint_title_search_index_matches(search_string)
+    if checkpoint_info is not None:
+        return checkpoint_info
 
     search_string_without_checksum = re.sub(re_strip_checksum, '', search_string)
-    found = sorted([info for info in checkpoints_list.values() if search_string_without_checksum in info.title], key=lambda x: len(x.title))
-    if found:
-        return found[0]
+    checkpoint_info = checkpoint_title_search_index_matches(search_string_without_checksum)
+    if checkpoint_info is not None:
+        return checkpoint_info
 
     return None
 
