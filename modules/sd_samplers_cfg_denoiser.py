@@ -1,4 +1,5 @@
 import torch
+from modules.cfg_denoiser_inputs import build_cfg_denoiser_inputs
 from modules import prompt_parser, sd_samplers_common
 
 from modules.shared import opts, state
@@ -200,13 +201,9 @@ class CFGDenoiser(torch.nn.Module):
                 make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [c_crossattn], "c_concat": [c_concat]}
 
         if not is_edit_model:
-            x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])
-            sigma_in = torch.cat([torch.stack([sigma[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [sigma])
-            image_cond_in = torch.cat([torch.stack([image_cond[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [image_uncond])
+            x_in, sigma_in, image_cond_in = build_cfg_denoiser_inputs(x, sigma, image_cond, image_uncond, repeats)
         else:
-            x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x] + [x])
-            sigma_in = torch.cat([torch.stack([sigma[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [sigma] + [sigma])
-            image_cond_in = torch.cat([torch.stack([image_cond[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [image_uncond] + [torch.zeros_like(self.init_latent)])
+            x_in, sigma_in, image_cond_in = build_cfg_denoiser_inputs(x, sigma, image_cond, image_uncond, repeats, edit_image_cond=torch.zeros_like(self.init_latent))
 
         denoiser_params = CFGDenoiserParams(x_in, image_cond_in, sigma_in, state.sampling_step, state.sampling_steps, tensor, uncond, self)
         cfg_denoiser_callback(denoiser_params)
