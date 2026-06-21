@@ -131,9 +131,9 @@ def _pop_oldest_cache_entry(subsection):
     try:
         key, _ = cache_obj.peekitem(last=False, retry=True)
         cache_obj.pop(key, None, retry=True)
-        return True
+        return True, cache_obj.volume()
     except KeyError:
-        return False
+        return False, 0
     finally:
         _close_temporary_cache(cache_obj, temporary)
 
@@ -176,13 +176,17 @@ def cleanup_cache(max_size_bytes=None, force=False, cleanup_interval=None):
 
         while total > max_size_bytes and usage:
             subsection = max(usage, key=usage.get)
-            if _get_cache_entry_count(subsection) <= 0 or not _pop_oldest_cache_entry(subsection):
+            evicted_entry, subsection_volume = _pop_oldest_cache_entry(subsection)
+            if not evicted_entry:
                 usage.pop(subsection, None)
                 continue
 
             evicted += 1
-            usage = get_cache_usage()
-            total = sum(usage.values())
+            total += subsection_volume - usage[subsection]
+            if _get_cache_entry_count(subsection) <= 0:
+                usage.pop(subsection, None)
+            else:
+                usage[subsection] = subsection_volume
 
         usage_after = get_cache_usage()
         return {

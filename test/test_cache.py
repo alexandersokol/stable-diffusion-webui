@@ -66,6 +66,34 @@ def test_cleanup_cache_evicts_entries_until_under_global_budget():
         restore()
 
 
+def test_cleanup_cache_does_not_rescan_all_subsections_after_each_eviction():
+    _, restore = use_temp_cache_dir()
+    original_get_cache_usage = cache.get_cache_usage
+    get_cache_usage_calls = 0
+
+    def counting_get_cache_usage():
+        nonlocal get_cache_usage_calls
+        get_cache_usage_calls += 1
+        return original_get_cache_usage()
+
+    try:
+        metadata_cache = cache.cache("metadata")
+        for i in range(5):
+            metadata_cache[f"entry-{i}"] = f"{i}" * 300000
+
+        before = sum(original_get_cache_usage().values())
+        cache.get_cache_usage = counting_get_cache_usage
+
+        result = cache.cleanup_cache(max_size_bytes=max(1, before - 900000), force=True)
+
+        assert result["evicted"] > 1
+        assert result["after"] < result["before"]
+        assert get_cache_usage_calls == 2
+    finally:
+        cache.get_cache_usage = original_get_cache_usage
+        restore()
+
+
 def test_cleanup_cache_disabled_budget_reports_without_eviction():
     _, restore = use_temp_cache_dir()
     try:
