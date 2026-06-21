@@ -18,7 +18,7 @@ from secrets import compare_digest
 
 import modules.shared as shared
 from modules import sd_samplers, deepbooru, sd_hijack, images, scripts, ui, postprocessing, errors, restart, shared_items, script_callbacks, infotext_utils, sd_models, sd_schedulers
-from modules.api import models
+from modules.api import image_response, models
 from modules.shared import opts
 from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
 from modules.textual_inversion.textual_inversion import create_embedding, train_embedding
@@ -431,6 +431,8 @@ class Api:
 
     def text2imgapi(self, txt2imgreq: models.StableDiffusionTxt2ImgProcessingAPI):
         task_id = txt2imgreq.force_task_id or create_task_id("txt2img")
+        image_return_mode = image_response.normalize_api_image_return_mode(txt2imgreq.image_return_mode)
+        save_images_for_response = txt2imgreq.send_images and image_return_mode == image_response.API_IMAGE_RETURN_FILE
 
         script_runner = scripts.scripts_txt2img
 
@@ -442,8 +444,8 @@ class Api:
 
         populate = txt2imgreq.copy(update={  # Override __init__ params
             "sampler_name": validate_sampler_name(sampler),
-            "do_not_save_samples": not txt2imgreq.save_images,
-            "do_not_save_grid": not txt2imgreq.save_images,
+            "do_not_save_samples": not (txt2imgreq.save_images or save_images_for_response),
+            "do_not_save_grid": not (txt2imgreq.save_images or save_images_for_response),
         })
         if populate.sampler_name:
             populate.sampler_index = None  # prevent a warning later on
@@ -456,6 +458,7 @@ class Api:
         args.pop('script_args', None) # will refeed them to the pipeline directly after initializing them
         args.pop('alwayson_scripts', None)
         args.pop('infotext', None)
+        args.pop('image_return_mode', None)
 
         script_args = self.init_script_args(txt2imgreq, self.default_script_arg_txt2img, selectable_scripts, selectable_script_idx, script_runner, input_script_args=infotext_script_args)
 
@@ -485,12 +488,25 @@ class Api:
                     shared.state.end()
                     shared.total_tqdm.clear()
 
-        b64images = list(map(encode_pil_to_base64, processed.images)) if send_images else []
+        b64images, image_paths = image_response.encode_processed_images_for_api(
+            processed,
+            send_images,
+            image_return_mode,
+            opts.outdir_txt2img_samples,
+            opts.outdir_txt2img_grids,
+            encode_pil_to_base64,
+            images.save_image,
+            opts.samples_format,
+            opts.grid_format,
+            opts.grid_extended_filename,
+        )
 
-        return models.TextToImageResponse(images=b64images, parameters=vars(txt2imgreq), info=processed.js())
+        return models.TextToImageResponse(images=b64images, image_paths=image_paths, parameters=vars(txt2imgreq), info=processed.js())
 
     def img2imgapi(self, img2imgreq: models.StableDiffusionImg2ImgProcessingAPI):
         task_id = img2imgreq.force_task_id or create_task_id("img2img")
+        image_return_mode = image_response.normalize_api_image_return_mode(img2imgreq.image_return_mode)
+        save_images_for_response = img2imgreq.send_images and image_return_mode == image_response.API_IMAGE_RETURN_FILE
 
         init_images = img2imgreq.init_images
         if init_images is None:
@@ -510,8 +526,8 @@ class Api:
 
         populate = img2imgreq.copy(update={  # Override __init__ params
             "sampler_name": validate_sampler_name(sampler),
-            "do_not_save_samples": not img2imgreq.save_images,
-            "do_not_save_grid": not img2imgreq.save_images,
+            "do_not_save_samples": not (img2imgreq.save_images or save_images_for_response),
+            "do_not_save_grid": not (img2imgreq.save_images or save_images_for_response),
             "mask": mask,
         })
         if populate.sampler_name:
@@ -526,6 +542,7 @@ class Api:
         args.pop('script_args', None)  # will refeed them to the pipeline directly after initializing them
         args.pop('alwayson_scripts', None)
         args.pop('infotext', None)
+        args.pop('image_return_mode', None)
 
         script_args = self.init_script_args(img2imgreq, self.default_script_arg_img2img, selectable_scripts, selectable_script_idx, script_runner, input_script_args=infotext_script_args)
 
@@ -556,13 +573,24 @@ class Api:
                     shared.state.end()
                     shared.total_tqdm.clear()
 
-        b64images = list(map(encode_pil_to_base64, processed.images)) if send_images else []
+        b64images, image_paths = image_response.encode_processed_images_for_api(
+            processed,
+            send_images,
+            image_return_mode,
+            opts.outdir_img2img_samples,
+            opts.outdir_img2img_grids,
+            encode_pil_to_base64,
+            images.save_image,
+            opts.samples_format,
+            opts.grid_format,
+            opts.grid_extended_filename,
+        )
 
         if not img2imgreq.include_init_images:
             img2imgreq.init_images = None
             img2imgreq.mask = None
 
-        return models.ImageToImageResponse(images=b64images, parameters=vars(img2imgreq), info=processed.js())
+        return models.ImageToImageResponse(images=b64images, image_paths=image_paths, parameters=vars(img2imgreq), info=processed.js())
 
     def extras_single_image_api(self, req: models.ExtrasSingleImageRequest):
         reqDict = setUpscalers(req)

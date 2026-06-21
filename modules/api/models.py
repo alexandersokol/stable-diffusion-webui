@@ -106,6 +106,7 @@ StableDiffusionTxt2ImgProcessingAPI = PydanticModelGenerator(
         {"key": "script_args", "type": list, "default": []},
         {"key": "send_images", "type": bool, "default": True},
         {"key": "save_images", "type": bool, "default": False},
+        {"key": "image_return_mode", "type": str, "default": "base64"},
         {"key": "alwayson_scripts", "type": dict, "default": {}},
         {"key": "force_task_id", "type": str, "default": None},
         {"key": "infotext", "type": str, "default": None},
@@ -125,6 +126,7 @@ StableDiffusionImg2ImgProcessingAPI = PydanticModelGenerator(
         {"key": "script_args", "type": list, "default": []},
         {"key": "send_images", "type": bool, "default": True},
         {"key": "save_images", "type": bool, "default": False},
+        {"key": "image_return_mode", "type": str, "default": "base64"},
         {"key": "alwayson_scripts", "type": dict, "default": {}},
         {"key": "force_task_id", "type": str, "default": None},
         {"key": "infotext", "type": str, "default": None},
@@ -133,11 +135,13 @@ StableDiffusionImg2ImgProcessingAPI = PydanticModelGenerator(
 
 class TextToImageResponse(BaseModel):
     images: list[str] = Field(default=None, title="Image", description="The generated image in base64 format.")
+    image_paths: list[Optional[str]] = Field(default=None, title="Image paths", description="Saved image paths when image_return_mode is file.")
     parameters: dict
     info: str
 
 class ImageToImageResponse(BaseModel):
     images: list[str] = Field(default=None, title="Image", description="The generated image in base64 format.")
+    image_paths: list[Optional[str]] = Field(default=None, title="Image paths", description="Saved image paths when image_return_mode is file.")
     parameters: dict
     info: str
 
