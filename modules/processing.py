@@ -926,6 +926,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     p.fill_fields_from_opts()
     p.setup_prompts()
+    state.setup_console_image_progress(len(p.all_prompts))
+    console_image_base = state.console_current_image_count
 
     if isinstance(seed, list):
         p.all_seeds = seed
@@ -974,6 +976,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
             p.seeds = p.all_seeds[n * p.batch_size:(n + 1) * p.batch_size]
             p.subseeds = p.all_subseeds[n * p.batch_size:(n + 1) * p.batch_size]
+            state.set_console_image_progress(current=console_image_base + min((n + 1) * p.batch_size, len(p.all_prompts)))
 
             latent_channels = getattr(shared.sd_model, 'latent_channels', opt_C)
             p.rng = rng.ImageRNG((latent_channels, p.height // opt_f, p.width // opt_f), p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)

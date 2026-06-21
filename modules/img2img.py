@@ -37,6 +37,7 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
     print(f"Will process {len(batch_images)} images, creating {p.n_iter * p.batch_size} new images for each.")
 
     state.job_count = len(batch_images) * p.n_iter
+    state.set_console_image_progress(current=0, total=len(batch_images) * p.n_iter * p.batch_size)
 
     # extract "default" params to use in case getting png info fails
     prompt = p.prompt

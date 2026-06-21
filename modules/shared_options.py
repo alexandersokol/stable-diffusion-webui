@@ -125,6 +125,7 @@ options_templates.update(options_section(('system', "System", "system"), {
     "samples_log_stdout": OptionInfo(False, "Always print all generation info to standard output"),
     "multiple_tqdm": OptionInfo(True, "Add a second progress bar to the console that shows progress for an entire job."),
     "enable_upscale_progressbar": OptionInfo(True, "Show a progress bar in the console for tiled upscaling."),
+    "console_progress_min_interval": OptionInfo(0.5, "Console progress refresh interval, seconds", gr.Slider, {"minimum": 0.0, "maximum": 5.0, "step": 0.1}).info("higher values reduce terminal update overhead; 0 lets tqdm refresh as often as it normally would"),
     "disk_cache_max_size_mb": OptionInfo(4096, "Maximum disk cache size, MB", gr.Slider, {"minimum": 0, "maximum": 65536, "step": 256}).info("0 disables global disk cache cleanup"),
     "disk_cache_cleanup_interval": OptionInfo(60, "Disk cache cleanup interval, seconds", gr.Number, {"precision": 0}).info("minimum time between automatic cleanup checks"),
     "torch_gc_min_interval": OptionInfo(2.0, "Minimum interval between Torch cache cleanup calls, seconds", gr.Slider, {"minimum": 0.0, "maximum": 30.0, "step": 0.5}).info("0 disables throttling and restores cleanup on every call"),

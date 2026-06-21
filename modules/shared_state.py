@@ -20,6 +20,8 @@ class State:
     job_timestamp = '0'
     sampling_step = 0
     sampling_steps = 0
+    console_current_image_count = 0
+    console_total_image_count = 0
     current_latent = None
     current_image = None
     current_image_sampling_step = 0
@@ -113,6 +115,21 @@ class State:
         self.current_image_sampling_step = 0
         self.id_live_preview = 0
 
+    def reset_console_image_progress(self):
+        self.console_current_image_count = 0
+        self.console_total_image_count = 0
+
+    def set_console_image_progress(self, *, current=None, total=None):
+        if total is not None:
+            self.console_total_image_count = max(0, int(total or 0))
+
+        if current is not None:
+            self.console_current_image_count = max(0, int(current or 0))
+
+    def setup_console_image_progress(self, total):
+        if self.console_total_image_count <= 0:
+            self.set_console_image_progress(current=0, total=total)
+
     def begin(self, job: str = "(unknown)"):
         self.sampling_step = 0
         self.time_start = time.time()
@@ -121,6 +138,7 @@ class State:
         self.job_no = 0
         self.job_timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         self.clear_current_preview()
+        self.reset_console_image_progress()
         self.skipped = False
         self.interrupted = False
         self.stopping_generation = False
@@ -135,6 +153,7 @@ class State:
         self.job = ""
         self.job_count = 0
         self.clear_current_preview()
+        self.reset_console_image_progress()
 
         devices.torch_gc()
 
