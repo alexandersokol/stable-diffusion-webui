@@ -5,10 +5,8 @@ import time
 import datetime
 import uvicorn
 import ipaddress
-import requests
 import gradio as gr
 from threading import Lock
-from io import BytesIO
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.exceptions import HTTPException
@@ -18,7 +16,7 @@ from secrets import compare_digest
 
 import modules.shared as shared
 from modules import sd_samplers, deepbooru, sd_hijack, images, scripts, ui, postprocessing, errors, restart, shared_items, script_callbacks, infotext_utils, sd_models, sd_schedulers
-from modules.api import image_response, models
+from modules.api import image_response, image_inputs, models
 from modules.shared import opts
 from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
 from modules.textual_inversion.textual_inversion import create_embedding, train_embedding
@@ -74,7 +72,17 @@ def verify_url(url):
     return True
 
 
-def decode_base64_to_image(encoding):
+def api_image_input_max_bytes():
+    return image_inputs.limit_bytes_from_mb(getattr(opts, "api_max_image_input_mb", 64))
+
+
+def api_batch_image_input_max_bytes():
+    return image_inputs.limit_bytes_from_mb(getattr(opts, "api_max_batch_image_input_mb", 256))
+
+
+def decode_base64_to_image(encoding, budget=None):
+    max_bytes = budget.max_bytes_per_image if budget is not None else api_image_input_max_bytes()
+
     if encoding.startswith("http://") or encoding.startswith("https://"):
         if not opts.api_enable_requests:
             raise HTTPException(status_code=500, detail="Requests not allowed")
@@ -83,20 +91,33 @@ def decode_base64_to_image(encoding):
             raise HTTPException(status_code=500, detail="Request to local resource not allowed")
 
         headers = {'user-agent': opts.api_useragent} if opts.api_useragent else {}
-        response = requests.get(encoding, timeout=30, headers=headers)
         try:
-            image = images.read(BytesIO(response.content))
+            image_data = image_inputs.download_image_bytes(encoding, max_bytes=max_bytes, headers=headers, batch_budget=budget)
+            image = images.read(io.BytesIO(image_data))
             return image
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail="Invalid image url") from e
 
-    if encoding.startswith("data:image/"):
-        encoding = encoding.split(";")[1].split(",")[1]
     try:
-        image = images.read(BytesIO(base64.b64decode(encoding)))
+        if budget is not None:
+            budget.admit(image_inputs.estimate_base64_decoded_size(encoding))
+        image = image_inputs.decode_base64_to_image(encoding, max_bytes=max_bytes, read_image=images.read)
         return image
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Invalid encoded image") from e
+
+
+def decode_image_list_to_images(image_list):
+    budget = image_inputs.ApiImageInputBudget(
+        max_bytes_per_image=api_image_input_max_bytes(),
+        max_batch_bytes=api_batch_image_input_max_bytes(),
+    )
+
+    return [decode_base64_to_image(x.data, budget=budget) for x in image_list]
 
 
 def encode_pil_to_base64(image):
@@ -606,7 +627,7 @@ class Api:
         reqDict = setUpscalers(req)
 
         image_list = reqDict.pop('imageList', [])
-        image_folder = [decode_base64_to_image(x.data) for x in image_list]
+        image_folder = decode_image_list_to_images(image_list)
 
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)

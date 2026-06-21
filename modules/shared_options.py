@@ -162,6 +162,8 @@ options_templates.update(options_section(('API', "API", "system"), {
     "api_enable_requests": OptionInfo(True, "Allow http:// and https:// URLs for input images in API", restrict_api=True),
     "api_forbid_local_requests": OptionInfo(True, "Forbid URLs to local resources", restrict_api=True),
     "api_useragent": OptionInfo("", "User agent for requests", restrict_api=True),
+    "api_max_image_input_mb": OptionInfo(64, "Maximum API input image size, MB", gr.Number, {"precision": 0}, restrict_api=True).info("0 disables the per-image compressed byte limit"),
+    "api_max_batch_image_input_mb": OptionInfo(256, "Maximum API batch input image size, MB", gr.Number, {"precision": 0}, restrict_api=True).info("0 disables the total compressed byte limit for API image batches"),
 }))
 
 options_templates.update(options_section(('training', "Training", "training"), {
