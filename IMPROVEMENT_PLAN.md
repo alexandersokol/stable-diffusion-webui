@@ -41,7 +41,7 @@ This document tracks resource, performance, and reliability improvements for thi
 
 | Id | name | description | status |
 | --- | --- | --- | --- |
-| 21 | Storage-heavy options need guardrails | Options such as grids, masks, before/after correction images, init image saving, and text sidecars can multiply output storage. Add estimated per-job storage warnings for large batches. | backlog |
+| 21 | Storage-heavy options need guardrails | Options such as grids, masks, before/after correction images, init image saving, and text sidecars can multiply output storage. Add estimated per-job storage warnings for large batches. | done |
 | 22 | Profiling output can be very large | Torch profiler settings can create hundreds of MB per run. Add rotation, explicit size warnings, and a cleanup button for profiling traces. | backlog |
 | 23 | Temp theme/cache directories lack UI cleanup | `tmp/gradio_themes`, moved corrupt config/cache files, and other auxiliary files can accumulate. Add a maintenance action that reports and cleans known safe temporary locations. | backlog |
 | 24 | Console progress overhead is always user-managed | `multiple_tqdm` and tiled upscale progress bars can add overhead in long runs. Add auto-disable heuristics for non-interactive or high-throughput sessions. | backlog |

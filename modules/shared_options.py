@@ -71,6 +71,8 @@ options_templates.update(options_section(('saving-images', "Saving images/grids"
     "clean_temp_dir_at_start": OptionInfo(False, "Cleanup non-default temporary directory when starting webui"),
 
     "save_incomplete_images": OptionInfo(False, "Save incomplete images").info("save images that has been interrupted in mid-generation; even if not saved, they will still show up in webui output."),
+    "storage_warning_enabled": OptionInfo(True, "Warn before starting jobs that may write a lot of image data"),
+    "storage_warning_threshold_mb": OptionInfo(1024, "Storage warning threshold, MB", gr.Number, {"precision": 0}).info("0 disables the warning threshold"),
 
     "notification_audio": OptionInfo(True, "Play notification sound after image generation").info("notification.mp3 should be present in the root directory").needs_reload_ui(),
     "notification_volume": OptionInfo(100, "Notification sound volume", gr.Slider, {"minimum": 0, "maximum": 100, "step": 1}).info("in %"),

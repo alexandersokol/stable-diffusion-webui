@@ -147,7 +147,174 @@ function showRestoreProgressButton(tabname, show) {
     button.style.setProperty('display', show ? 'flex' : 'none', 'important');
 }
 
-function submit() {
+function getInputNumberValue(elemId, fallback) {
+    var input = gradioApp().querySelector("#" + elemId + " input");
+    if (!input) return fallback;
+
+    var value = Number(input.value);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function getInputCheckboxValue(elemId, fallback) {
+    var input = gradioApp().querySelector("#" + elemId + " input[type=checkbox]");
+    if (!input) return fallback;
+
+    return input.checked;
+}
+
+function estimateImageStorageBytes(width, height, imageFormat) {
+    var bytesPerPixel = {
+        jpg: 1.0,
+        jpeg: 1.0,
+        webp: 1.2,
+        avif: 1.0,
+        png: 2.5
+    };
+
+    var format = (imageFormat || "png").toLowerCase();
+    return Math.max(1, width) * Math.max(1, height) * (bytesPerPixel[format] || bytesPerPixel.png);
+}
+
+function formatStorageBytes(bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+    }
+
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function getTxt2imgStorageDimensions() {
+    var width = getInputNumberValue("txt2img_width", 512);
+    var height = getInputNumberValue("txt2img_height", 512);
+    var enableHr = getInputCheckboxValue("txt2img_hr", false);
+
+    if (!enableHr) return {width: width, height: height, enableHr: false};
+
+    var hrResizeX = getInputNumberValue("txt2img_hr_resize_x", 0);
+    var hrResizeY = getInputNumberValue("txt2img_hr_resize_y", 0);
+    var hrScale = getInputNumberValue("txt2img_hr_scale", 2);
+
+    if (hrResizeX > 0 && hrResizeY > 0) {
+        width = hrResizeX;
+        height = hrResizeY;
+    } else if (hrResizeX > 0) {
+        height = Math.round(height * hrResizeX / width);
+        width = hrResizeX;
+    } else if (hrResizeY > 0) {
+        width = Math.round(width * hrResizeY / height);
+        height = hrResizeY;
+    } else {
+        width = Math.round(width * hrScale);
+        height = Math.round(height * hrScale);
+    }
+
+    return {width: width, height: height, enableHr: true};
+}
+
+function getGridStorageDimensions(width, height, imageCount, batchSize) {
+    var cols = Math.max(1, Math.min(batchSize, imageCount));
+    var rows = Math.ceil(imageCount / cols);
+
+    return {width: width * cols, height: height * rows};
+}
+
+function hasImg2imgMask() {
+    return get_tab_index("mode_img2img") >= 2;
+}
+
+function estimateGenerationStorage(tabname) {
+    var dimensions = tabname == "txt2img" ? getTxt2imgStorageDimensions() : {
+        width: getInputNumberValue("img2img_width", 512),
+        height: getInputNumberValue("img2img_height", 512),
+        enableHr: false
+    };
+    var batchCount = Math.max(1, Math.round(getInputNumberValue(tabname + "_batch_count", 1)));
+    var batchSize = Math.max(1, Math.round(getInputNumberValue(tabname + "_batch_size", 1)));
+    var imageCount = batchCount * batchSize;
+    var sampleBytes = estimateImageStorageBytes(dimensions.width, dimensions.height, opts.samples_format);
+    var totalBytes = 0;
+    var imageFiles = 0;
+    var textFiles = 0;
+
+    var addImages = function(count, bytesPerImage) {
+        if (count <= 0) return;
+
+        imageFiles += count;
+        totalBytes += count * (bytesPerImage || sampleBytes);
+        if (opts.save_txt) {
+            textFiles += count;
+            totalBytes += count * 4096;
+        }
+    };
+
+    if (opts.samples_save) {
+        addImages(imageCount);
+
+        if (opts.save_images_before_face_restoration) {
+            addImages(imageCount);
+        }
+
+        if (tabname == "txt2img" && dimensions.enableHr && opts.save_images_before_highres_fix) {
+            addImages(imageCount);
+        }
+
+        if (tabname == "img2img" && opts.save_images_before_color_correction) {
+            addImages(imageCount);
+        }
+
+        if (tabname == "img2img" && hasImg2imgMask()) {
+            if (opts.save_mask) addImages(imageCount);
+            if (opts.save_mask_composite) addImages(imageCount);
+        }
+    }
+
+    if (tabname == "img2img" && opts.save_init_img) {
+        addImages(1);
+    }
+
+    var shouldSaveGrid = opts.grid_save && imageCount > 0 && (imageCount > 1 || !opts.grid_only_if_multiple);
+    if (shouldSaveGrid) {
+        var gridDimensions = getGridStorageDimensions(dimensions.width, dimensions.height, imageCount, batchSize);
+        addImages(1, estimateImageStorageBytes(gridDimensions.width, gridDimensions.height, opts.grid_format));
+    }
+
+    return {
+        bytes: totalBytes,
+        imageFiles: imageFiles,
+        textFiles: textFiles,
+        imageCount: imageCount,
+        width: dimensions.width,
+        height: dimensions.height
+    };
+}
+
+function confirmStorageWarning(tabname) {
+    if (!opts.storage_warning_enabled) return true;
+
+    var thresholdMb = Number(opts.storage_warning_threshold_mb || 0);
+    if (!Number.isFinite(thresholdMb) || thresholdMb <= 0) return true;
+
+    var estimate = estimateGenerationStorage(tabname);
+    var thresholdBytes = thresholdMb * 1024 * 1024;
+    if (estimate.bytes < thresholdBytes) return true;
+
+    return confirm(
+        "This generation may write about " + formatStorageBytes(estimate.bytes) + " to disk.\n\n" +
+        "Images/files: " + estimate.imageFiles + (estimate.textFiles ? " images + " + estimate.textFiles + " text files" : " images") + "\n" +
+        "Output size: " + estimate.width + "x" + estimate.height + ", batch images: " + estimate.imageCount + "\n\n" +
+        "Continue?"
+    );
+}
+
+function cancelGenerationSubmit(message) {
+    throw new Error(message || "Generation cancelled.");
+}
+
+function submitCore(args, warnStorage) {
+    if (warnStorage && !confirmStorageWarning('txt2img')) {
+        cancelGenerationSubmit("Generation cancelled by storage warning.");
+    }
+
     showSubmitButtons('txt2img', false);
 
     var id = randomId("txt2img");
@@ -159,15 +326,19 @@ function submit() {
         showRestoreProgressButton('txt2img', false);
     });
 
-    var res = create_submit_args(arguments);
+    var res = create_submit_args(args);
 
     res[0] = id;
 
     return res;
 }
 
+function submit() {
+    return submitCore(arguments, true);
+}
+
 function submit_txt2img_upscale() {
-    var res = submit(...arguments);
+    var res = submitCore(arguments, false);
 
     res[2] = selected_gallery_index();
 
@@ -175,6 +346,10 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
+    if (!confirmStorageWarning('img2img')) {
+        cancelGenerationSubmit("Generation cancelled by storage warning.");
+    }
+
     showSubmitButtons('img2img', false);
 
     var id = randomId("img2img");
