@@ -145,13 +145,15 @@ def on_tmpdir_changed():
     register_tmp_file(shared.demo, os.path.join(shared.opts.temp_dir, "x"))
 
 
-def cleanup_tmpdr():
+def cleanup_tmpdir_files():
     temp_dir = shared.opts.temp_dir
     if temp_dir == "" or not os.path.isdir(temp_dir):
-        return
+        return {"removed": 0, "reclaimed": 0, "remaining": 0}
 
     remaining_files = set()
     tracked_files = _read_manifest(temp_dir)
+    removed = 0
+    reclaimed = 0
 
     for filename in tracked_files:
         if not _is_relative_to(filename, temp_dir):
@@ -161,7 +163,9 @@ def cleanup_tmpdr():
             continue
 
         try:
+            reclaimed += os.path.getsize(filename)
             os.remove(filename)
+            removed += 1
         except OSError:
             remaining_files.add(filename)
 
@@ -179,11 +183,23 @@ def cleanup_tmpdr():
                 if now - os.path.getmtime(filename) < WEBUI_TEMP_ORPHAN_TTL:
                     continue
 
+                reclaimed += os.path.getsize(filename)
                 os.remove(filename)
+                removed += 1
             except OSError:
                 pass
 
     _write_manifest(temp_dir, remaining_files)
+    return {"removed": removed, "reclaimed": reclaimed, "remaining": len(remaining_files)}
+
+
+def cleanup_tmpdr():
+    cleanup_tmpdir_files()
+
+
+def cleanup_tmpdir_report():
+    result = cleanup_tmpdir_files()
+    return f"WebUI temp cleanup removed {result['removed']} files and reclaimed {result['reclaimed'] / (1024 * 1024):.1f} MB."
 
 
 def is_gradio_temp_path(path):
