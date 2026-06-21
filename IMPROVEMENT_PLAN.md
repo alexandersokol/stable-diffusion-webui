@@ -22,7 +22,7 @@ This document tracks resource, performance, and reliability improvements for thi
 | 9 | Checkpoint RAM cache has no memory budget | `modules/sd_models.py` can keep multiple checkpoints in CPU RAM when `sd_checkpoints_limit` is increased. Add estimated memory accounting, UI warnings, and eviction by memory pressure rather than count only. | done |
 | 10 | Built-in upscaler model retention | `extensions-builtin/SwinIR` caches the loaded model on device, while `extensions-builtin/LDSR` exposes a cache option but reload behavior is not clearly bounded. Add explicit unload/cache controls and memory reporting for built-in upscalers. | done |
 | 11 | Recorded progress results retain images | `modules/progress.py` keeps recent `Processed` results for restore. Even with a small count, each result can contain large images. Store lightweight references or temp-file-backed results instead of full image objects. | done |
-| 12 | LoRA weight backups can grow CPU RAM | `extensions-builtin/Lora/networks.py` stores CPU backup weights on patched layers. Audit lifecycle and add cleanup/telemetry so frequent LoRA changes do not retain unnecessary backup tensors. | backlog |
+| 12 | LoRA weight backups can grow CPU RAM | `extensions-builtin/Lora/networks.py` stores CPU backup weights on patched layers. Audit lifecycle and add cleanup/telemetry so frequent LoRA changes do not retain unnecessary backup tensors. | done |
 
 ## Medium
 

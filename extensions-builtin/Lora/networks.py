@@ -23,6 +23,7 @@ import modules.textual_inversion.textual_inversion as textual_inversion
 import modules.models.sd3.mmdit
 
 from lora_logger import logger
+import lora_backup
 
 module_types = [
     network_lora.ModuleTypeLora(),
@@ -291,6 +292,11 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
 
     loaded_networks.clear()
 
+    if not names:
+        restore_network_weights_from_backups(clear=True)
+        purge_networks_from_memory()
+        return
+
     unavailable_networks = []
     for name in names:
         if name.lower() in forbidden_network_aliases and available_networks.get(name) is None:
@@ -385,7 +391,8 @@ def restore_weights_backup(obj, field, weight):
         setattr(obj, field, None)
         return
 
-    getattr(obj, field).copy_(weight)
+    with torch.no_grad():
+        getattr(obj, field).copy_(weight)
 
 
 def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
@@ -406,6 +413,48 @@ def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Li
         restore_weights_backup(self.out_proj, 'bias', bias_backup)
     else:
         restore_weights_backup(self, 'bias', bias_backup)
+
+
+def network_clear_weight_backup(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
+    self.network_current_names = ()
+    self.network_weights_backup = None
+    self.network_bias_backup = None
+    lora_backup.forget_layer(self)
+
+
+def restore_network_weights_from_backups(clear=True):
+    summary = lora_backup.summarize_tracked_backups()
+    restored_layers = 0
+
+    for layer in lora_backup.iter_tracked_layers():
+        if not lora_backup.layer_has_backup(layer):
+            lora_backup.forget_layer(layer)
+            continue
+
+        network_restore_weights_from_backup(layer)
+        restored_layers += 1
+
+        if clear:
+            network_clear_weight_backup(layer)
+        else:
+            layer.network_current_names = ()
+
+    if clear and restored_layers > 0:
+        logger.debug(
+            "Cleared LoRA backup tensors for %s layers (%s)",
+            restored_layers,
+            lora_backup.format_bytes(summary["bytes"]),
+        )
+
+    return {"layers": restored_layers, "bytes": summary["bytes"]}
+
+
+def unload_networks():
+    summary = restore_network_weights_from_backups(clear=True)
+    loaded_networks.clear()
+    devices.torch_gc()
+
+    return summary
 
 
 def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
@@ -433,6 +482,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
             weights_backup = store_weights_backup(self.weight)
 
         self.network_weights_backup = weights_backup
+        lora_backup.track_layer(self)
 
     bias_backup = getattr(self, "network_bias_backup", None)
     if bias_backup is None and wanted_names != ():
@@ -449,6 +499,8 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
             raise RuntimeError("no backup bias found and current bias are not unchanged")
 
         self.network_bias_backup = bias_backup
+        if bias_backup is not None:
+            lora_backup.track_layer(self)
 
     if current_names != wanted_names:
         network_restore_weights_from_backup(self)
@@ -570,9 +622,7 @@ def network_forward(org_module, input, original_forward):
 
 
 def network_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
-    self.network_current_names = ()
-    self.network_weights_backup = None
-    self.network_bias_backup = None
+    network_clear_weight_backup(self)
 
 
 def network_Linear_forward(self, input):
