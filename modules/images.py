@@ -20,6 +20,7 @@ import json
 import hashlib
 
 from modules import sd_samplers, shared, script_callbacks, errors
+from modules.image_hash import calculate_image_sha256
 from modules.image_filename import get_next_sequence_filename
 from modules.paths_internal import roboto_ttf_file
 from modules.shared import opts
@@ -497,7 +498,7 @@ class FilenameGenerator:
 
     def image_hash(self, *args):
         length = int(args[0]) if (args and args[0] != "") else None
-        return hashlib.sha256(self.image.tobytes()).hexdigest()[0:length]
+        return calculate_image_sha256(self.image)[0:length]
 
     def string_hash(self, text, *args):
         length = int(args[0]) if (args and args[0] != "") else 8
