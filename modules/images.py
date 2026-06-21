@@ -20,7 +20,7 @@ import json
 import hashlib
 
 from modules import sd_samplers, shared, script_callbacks, errors
-from modules.image_filename import get_next_available_filename
+from modules.image_filename import get_next_sequence_filename
 from modules.paths_internal import roboto_ttf_file
 from modules.shared import opts
 
@@ -541,28 +541,6 @@ class FilenameGenerator:
         return res
 
 
-def get_next_sequence_number(path, basename):
-    """
-    Determines and returns the next sequence number to use when saving an image in the specified directory.
-
-    The sequence starts at 0.
-    """
-    result = -1
-    if basename != '':
-        basename = f"{basename}-"
-
-    prefix_length = len(basename)
-    for p in os.listdir(path):
-        if p.startswith(basename):
-            parts = os.path.splitext(p[prefix_length:])[0].split('-')  # splits the filename (removing the basename first if one is defined, so the sequence number is always the first element)
-            try:
-                result = max(int(parts[0]), result)
-            except ValueError:
-                pass
-
-    return result + 1
-
-
 def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_pnginfo=None, pnginfo_section_name='parameters'):
     """
     Saves image to filename, including geninfo as text information for generation info.
@@ -687,8 +665,7 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
             file_decoration = f"-{file_decoration}"
 
         if add_number:
-            basecount = get_next_sequence_number(path, basename)
-            fullfn = get_next_available_filename(path, basename, file_decoration, extension, basecount)
+            fullfn = get_next_sequence_filename(path, basename, file_decoration, extension)
         else:
             fullfn = os.path.join(path, f"{file_decoration}.{extension}")
     else:
