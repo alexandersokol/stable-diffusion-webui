@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import hashlib
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -628,11 +629,12 @@ def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
     if check_for_nans:
         devices.test_for_nans(batch, "unet")
 
-    for i in range(batch.shape[0]):
-        sample = decode_first_stage(model, batch[i:i + 1])[0]
+    def decode_one(index):
+        nonlocal batch
+
+        sample = decode_first_stage(model, batch[index:index + 1])[0]
 
         if check_for_nans:
-
             try:
                 devices.test_for_nans(sample, "vae")
             except devices.NansException as e:
@@ -662,14 +664,53 @@ def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
                 model.first_stage_model.to(devices.dtype_vae)
                 batch = batch.to(devices.dtype_vae)
 
-                sample = decode_first_stage(model, batch[i:i + 1])[0]
+                sample = decode_first_stage(model, batch[index:index + 1])[0]
 
-        if target_device is not None:
-            sample = sample.to(target_device)
+        return sample
 
-        samples.append(sample)
+    chunk_size = final_vae_decode_chunk_size(batch.shape[0])
+    for start in range(0, batch.shape[0], chunk_size):
+        end = min(start + chunk_size, batch.shape[0])
+        decoded = decode_first_stage(model, batch[start:end])
+
+        if check_for_nans:
+            try:
+                devices.test_for_nans(decoded, "vae")
+            except devices.NansException:
+                decoded = [decode_one(index) for index in range(start, end)]
+
+        for sample in decoded:
+            if target_device is not None:
+                sample = sample.to(target_device)
+
+            samples.append(sample)
 
     return samples
+
+
+def final_vae_decode_chunk_size(batch_size):
+    try:
+        chunk_size = int(getattr(shared.opts, "final_vae_decode_chunk_size", 1))
+    except (TypeError, ValueError):
+        chunk_size = 1
+
+    return max(1, min(batch_size, chunk_size))
+
+
+def add_timing(timings, key, elapsed):
+    timings[key] = timings.get(key, 0.0) + elapsed
+
+
+def add_finalization_timing_comment(p, timings):
+    parts = [f"{name} {elapsed:.2f}s" for name, elapsed in timings.items() if elapsed >= 0.01]
+    if not parts:
+        return
+
+    comment = "Finalization: " + ", ".join(parts)
+    if hasattr(p, "comment"):
+        p.comment(comment)
+    else:
+        p.comments.append(comment)
 
 
 def get_fixed_seed(seed):
@@ -948,6 +989,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     infotexts = []
     output_images = []
     output_image_paths = []
+    finalization_timings = {}
     with torch.no_grad(), p.sd_model.ema_scope():
         with devices.autocast():
             p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
@@ -1031,7 +1073,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
                 if opts.sd_vae_decode_method != 'Full':
                     p.extra_generation_params['VAE Decoder'] = opts.sd_vae_decode_method
+                finalization_start = time.perf_counter()
                 x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
+                add_timing(finalization_timings, "VAE decode", time.perf_counter() - finalization_start)
 
             x_samples_ddim = torch.stack(x_samples_ddim).float()
             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
@@ -1060,15 +1104,23 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             save_samples = p.save_samples()
 
+            def save_image_timed(*args, **kwargs):
+                finalization_start = time.perf_counter()
+                result = images.save_image(*args, **kwargs)
+                add_timing(finalization_timings, "Image save", time.perf_counter() - finalization_start)
+                return result
+
             for i, x_sample in enumerate(x_samples_ddim):
                 p.batch_index = i
 
+                finalization_start = time.perf_counter()
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
                 x_sample = x_sample.astype(np.uint8)
+                add_timing(finalization_timings, "Tensor to image", time.perf_counter() - finalization_start)
 
                 if p.restore_faces:
                     if save_samples and opts.save_images_before_face_restoration:
-                        images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
+                        save_image_timed(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
 
                     devices.torch_gc()
 
@@ -1099,7 +1151,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if p.color_corrections is not None and i < len(p.color_corrections):
                     if save_samples and opts.save_images_before_color_correction:
                         image_without_cc, _ = apply_overlay(image, p.paste_to, overlay_image)
-                        images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
+                        save_image_timed(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
                     image = apply_color_correction(p.color_corrections[i], image)
 
                 # If the intention is to show the output from the model
@@ -1115,7 +1167,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
                 saved_image_path = None
                 if save_samples:
-                    saved_image_path, _ = images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    saved_image_path, _ = save_image_timed(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
 
                 text = infotext(i)
                 infotexts.append(text)
@@ -1129,7 +1181,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         image_mask = mask_for_overlay.convert('RGB')
                         saved_mask_path = None
                         if save_samples and opts.save_mask:
-                            saved_mask_path, _ = images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+                            saved_mask_path, _ = save_image_timed(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
                         if opts.return_mask:
                             output_images.append(image_mask)
                             output_image_paths.append(saved_mask_path)
@@ -1138,7 +1190,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         image_mask_composite = Image.composite(original_denoised_image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
                         saved_mask_composite_path = None
                         if save_samples and opts.save_mask_composite:
-                            saved_mask_composite_path, _ = images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+                            saved_mask_composite_path, _ = save_image_timed(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
                         if opts.return_mask_composite:
                             output_images.append(image_mask_composite)
                             output_image_paths.append(saved_mask_composite_path)
@@ -1166,7 +1218,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 output_image_paths.insert(0, None)
                 index_of_first_image = 1
             if opts.grid_save:
-                saved_grid_path, _ = images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                saved_grid_path, _ = save_image_timed(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
                 if opts.return_grid:
                     output_image_paths[0] = saved_grid_path
 
@@ -1174,6 +1226,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         extra_networks.deactivate(p, p.extra_network_data)
 
     devices.torch_gc()
+    add_finalization_timing_comment(p, finalization_timings)
 
     res = Processed(
         p,

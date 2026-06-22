@@ -54,6 +54,7 @@ options_templates.update(options_section(('saving-images', "Saving images/grids"
     "save_images_before_color_correction": OptionInfo(False, "Save a copy of image before applying color correction to img2img results"),
     "save_mask": OptionInfo(False, "For inpainting, save a copy of the greyscale mask"),
     "save_mask_composite": OptionInfo(False, "For inpainting, save a masked composite"),
+    "png_compress_level": OptionInfo(4, "PNG compression level for saved images", gr.Slider, {"minimum": 0, "maximum": 9, "step": 1}).info("0 saves fastest and largest; 9 saves smallest and slowest"),
     "jpeg_quality": OptionInfo(80, "Quality for saved jpeg and avif images", gr.Slider, {"minimum": 1, "maximum": 100, "step": 1}),
     "webp_lossless": OptionInfo(False, "Use lossless compression for webp images"),
     "export_for_4chan": OptionInfo(True, "Save copy of large images as JPG").info("if the file size is above the limit, or either width or height are above the limit"),
@@ -226,6 +227,7 @@ For img2img, VAE is used to process user's input image before the sampling, and 
     "auto_vae_precision": OptionInfo(True, "Automatically revert VAE to 32-bit floats").info("triggers when a tensor with NaNs is produced in VAE; disabling the option in this case will result in a black square image"),
     "sd_vae_encode_method": OptionInfo("Full", "VAE type for encode", gr.Radio, {"choices": ["Full", "TAESD"]}, infotext='VAE Encoder').info("method to encode image to latent (use in img2img, hires-fix or inpaint mask)"),
     "sd_vae_decode_method": OptionInfo("Full", "VAE type for decode", gr.Radio, {"choices": ["Full", "TAESD"]}, infotext='VAE Decoder').info("method to decode latent to image"),
+    "final_vae_decode_chunk_size": OptionInfo(1, "Final VAE decode batch size", gr.Slider, {"minimum": 1, "maximum": 16, "step": 1}).info("higher can reduce post-sampling delay for batches, but uses more VRAM"),
 }))
 
 options_templates.update(options_section(('img2img', "img2img", "sd"), {
