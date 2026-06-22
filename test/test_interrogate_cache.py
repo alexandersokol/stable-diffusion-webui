@@ -61,6 +61,32 @@ def test_rank_reuses_cached_text_features_for_same_category():
     assert len(model.text_feature_cache) == 1
 
 
+def test_rank_batches_similarity_for_multiple_image_features(monkeypatch):
+    model, _fake_clip = create_interrogator()
+    image_features = torch.tensor([[1.0, 0.5], [0.25, 1.5]], dtype=torch.float32)
+    text_items = ["first", "second", "third"]
+    _limited_text_array, text_features = model.cached_text_features(text_items, "artists")
+    expected_similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1).mean(dim=0, keepdim=True)
+    expected_probs, expected_labels = expected_similarity.cpu().topk(2, dim=-1)
+    expected = [
+        (text_items[expected_labels[0][i].numpy()], expected_probs[0][i].numpy() * 100)
+        for i in range(2)
+    ]
+    softmax_shapes = []
+    original_softmax = torch.Tensor.softmax
+
+    def recording_softmax(self, *args, **kwargs):
+        softmax_shapes.append(tuple(self.shape))
+        return original_softmax(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "softmax", recording_softmax)
+
+    actual = model.rank(image_features, text_items, top_count=2, category_name="artists")
+
+    assert actual == expected
+    assert softmax_shapes == [(2, 3)]
+
+
 def test_rank_recomputes_text_features_when_dict_limit_changes():
     model, fake_clip = create_interrogator(dict_limit=2)
     image_features = torch.tensor([[1.0, 1.0]])
