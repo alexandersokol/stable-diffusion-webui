@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+import shutil
+import tempfile
 import numpy as np
 import PIL
 import torch
@@ -18,7 +21,7 @@ re_numbers_at_start = re.compile(r"^[-\d]+\s*")
 
 
 class DatasetEntry:
-    def __init__(self, filename=None, filename_text=None, latent_dist=None, latent_sample=None, cond=None, cond_text=None, pixel_values=None, weight=None):
+    def __init__(self, filename=None, filename_text=None, latent_dist=None, latent_sample=None, cond=None, cond_text=None, pixel_values=None, weight=None, cache_file=None):
         self.filename = filename
         self.filename_text = filename_text
         self.weight = weight
@@ -27,13 +30,36 @@ class DatasetEntry:
         self.cond = cond
         self.cond_text = cond_text
         self.pixel_values = pixel_values
+        self.cache_file = cache_file
+
+    def copy_metadata(self):
+        return DatasetEntry(
+            filename=self.filename,
+            filename_text=self.filename_text,
+            cond_text=self.cond_text,
+            pixel_values=self.pixel_values,
+            cache_file=self.cache_file,
+        )
 
 
 class PersonalizedBase(Dataset):
-    def __init__(self, data_root, width, height, repeats, flip_p=0.5, placeholder_token="*", model=None, cond_model=None, device=None, template_file=None, include_cond=False, batch_size=1, gradient_step=1, shuffle_tags=False, tag_drop_out=0, latent_sampling_method='once', varsize=False, use_weight=False):
+    def __init__(self, data_root, width, height, repeats, flip_p=0.5, placeholder_token="*", model=None, cond_model=None, device=None, template_file=None, include_cond=False, batch_size=1, gradient_step=1, shuffle_tags=False, tag_drop_out=0, latent_sampling_method='once', varsize=False, use_weight=False, cache_mode=None, cache_dir=None):
         re_word = re.compile(shared.opts.dataset_filename_word_regex) if shared.opts.dataset_filename_word_regex else None
 
         self.placeholder_token = placeholder_token
+        self.cache_mode = cache_mode if cache_mode is not None else getattr(shared.opts, "training_dataset_latent_cache_mode", "memory")
+        if self.cache_mode not in ("memory", "disk"):
+            raise ValueError(f"unknown textual inversion dataset cache mode: {self.cache_mode}")
+
+        self.cache_dir = None
+        self.owns_cache_dir = False
+        if self.cache_mode == "disk":
+            if cache_dir is None:
+                self.cache_dir = Path(tempfile.mkdtemp(prefix="textual-inversion-latents-"))
+                self.owns_cache_dir = True
+            else:
+                self.cache_dir = Path(cache_dir)
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
@@ -108,7 +134,7 @@ class PersonalizedBase(Dataset):
                 weight_img = alpha_channel.resize(latent_size)
                 npweight = np.array(weight_img).astype(np.float32)
                 #Repeat for every channel in the latent sample
-                weight = torch.tensor([npweight] * channels).reshape([channels] + latent_size)
+                weight = torch.from_numpy(np.broadcast_to(npweight, [channels] + latent_size).copy())
                 #Normalize the weight to a minimum of 0 and a mean of 1, that way the loss will be comparable to default.
                 weight -= weight.min()
                 weight /= weight.mean()
@@ -129,6 +155,7 @@ class PersonalizedBase(Dataset):
             if include_cond and not (self.tag_drop_out != 0 or self.shuffle_tags):
                 with devices.autocast():
                     entry.cond = cond_model([entry.cond_text]).to(devices.cpu).squeeze(0)
+            self.cache_entry_tensors(entry, len(self.dataset))
             groups[image.size].append(len(self.dataset))
             self.dataset.append(entry)
             del torchdata
@@ -149,6 +176,33 @@ class PersonalizedBase(Dataset):
                 print(f"  {w}x{h}: {len(ids)}")
             print()
 
+    def cache_entry_tensors(self, entry, index):
+        if self.cache_mode != "disk":
+            return
+
+        payload = {}
+        for name in ("latent_sample", "latent_dist", "cond", "weight"):
+            value = getattr(entry, name)
+            if value is not None:
+                payload[name] = value
+                setattr(entry, name, None)
+
+        entry.cache_file = self.cache_dir / f"{index:08d}.pt"
+        torch.save(payload, entry.cache_file)
+
+    def load_cached_tensors(self, entry):
+        if self.cache_mode != "disk" or entry.cache_file is None:
+            return entry
+
+        try:
+            payload = torch.load(entry.cache_file, map_location=devices.cpu, weights_only=False)
+        except TypeError:
+            payload = torch.load(entry.cache_file, map_location=devices.cpu)
+        for name, value in payload.items():
+            setattr(entry, name, value)
+
+        return entry
+
     def create_text(self, filename_text):
         text = random.choice(self.lines)
         tags = filename_text.split(',')
@@ -165,11 +219,19 @@ class PersonalizedBase(Dataset):
 
     def __getitem__(self, i):
         entry = self.dataset[i]
+        if self.cache_mode == "disk":
+            entry = self.load_cached_tensors(entry.copy_metadata())
         if self.tag_drop_out != 0 or self.shuffle_tags:
             entry.cond_text = self.create_text(entry.filename_text)
         if self.latent_sampling_method == "random":
             entry.latent_sample = shared.sd_model.get_first_stage_encoding(entry.latent_dist).to(devices.cpu)
+            if self.cache_mode == "disk":
+                entry.latent_dist = None
         return entry
+
+    def __del__(self):
+        if getattr(self, "owns_cache_dir", False) and getattr(self, "cache_dir", None) is not None:
+            shutil.rmtree(self.cache_dir, ignore_errors=True)
 
 
 class GroupedBatchSampler(Sampler):

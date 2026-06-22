@@ -173,6 +173,7 @@ options_templates.update(options_section(('training', "Training", "training"), {
     "save_training_settings_to_txt": OptionInfo(True, "Save textual inversion and hypernet settings to a text file whenever training starts."),
     "dataset_filename_word_regex": OptionInfo("", "Filename word regex"),
     "dataset_filename_join_string": OptionInfo(" ", "Filename join string"),
+    "training_dataset_latent_cache_mode": OptionInfo("memory", "Textual inversion dataset latent cache", gr.Radio, {"choices": ["memory", "disk"]}).info("memory keeps current behavior; disk lowers RAM use by loading cached tensors per batch"),
     "training_image_repeats_per_epoch": OptionInfo(1, "Number of repeats for a single input image per epoch; used only for displaying epoch number", gr.Number, {"precision": 0}),
     "training_write_csv_every": OptionInfo(500, "Save an csv containing the loss to log directory every N steps, 0 to disable"),
     "training_xattention_optimizations": OptionInfo(False, "Use cross attention optimizations while training"),
