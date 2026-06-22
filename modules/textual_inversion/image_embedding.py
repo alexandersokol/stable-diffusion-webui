@@ -45,9 +45,12 @@ def lcg(m=2**32, a=1664525, c=1013904223, seed=0):
         yield seed % 255
 
 
+def lcg_bytes(count, m=2**32, a=1664525, c=1013904223, seed=0):
+    return np.fromiter(lcg(m=m, a=a, c=c, seed=seed), dtype=np.uint32, count=count).astype(np.uint8)
+
+
 def xor_block(block):
-    g = lcg()
-    randblock = np.array([next(g) for _ in range(np.prod(block.shape))]).astype(np.uint8).reshape(block.shape)
+    randblock = lcg_bytes(np.prod(block.shape)).reshape(block.shape)
     return np.bitwise_xor(block.astype(np.uint8), randblock & 0x0F)
 
 
@@ -142,16 +145,16 @@ def caption_image_overlay(srcimage, title, footerLeft, footerMid, footerRight, t
             DeprecationWarning,
             stacklevel=2,
         )
-    from math import cos
-
     image = srcimage.copy()
     fontsize = 32
     factor = 1.5
-    gradient = Image.new('RGBA', (1, image.size[1]), color=(0, 0, 0, 0))
-    for y in range(image.size[1]):
-        mag = 1-cos(y/image.size[1]*factor)
-        mag = max(mag, 1-cos((image.size[1]-y)/image.size[1]*factor*1.1))
-        gradient.putpixel((0, y), (0, 0, 0, int(mag*255)))
+    y = np.arange(image.size[1], dtype=np.float64)
+    mag_top = 1 - np.cos(y / image.size[1] * factor)
+    mag_bottom = 1 - np.cos((image.size[1] - y) / image.size[1] * factor * 1.1)
+    alpha = np.clip((np.maximum(mag_top, mag_bottom) * 255).astype(np.int16), 0, 255).astype(np.uint8)
+    gradient_arr = np.zeros((image.size[1], 1, 4), dtype=np.uint8)
+    gradient_arr[:, 0, 3] = alpha
+    gradient = Image.fromarray(gradient_arr, mode='RGBA')
     image = Image.alpha_composite(image.convert('RGBA'), gradient.resize(image.size))
 
     draw = ImageDraw.Draw(image)
