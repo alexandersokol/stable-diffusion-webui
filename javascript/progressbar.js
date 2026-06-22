@@ -31,6 +31,24 @@ function request(url, data, handler, errorHandler) {
     xhr.send(js);
 }
 
+function requestBlob(url, data, handler, errorHandler) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.responseType = "blob";
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                handler(xhr.response);
+            } else {
+                if (errorHandler) errorHandler();
+            }
+        }
+    };
+    var js = JSON.stringify(data);
+    xhr.send(js);
+}
+
 function pad2(x) {
     return x < 10 ? '0' + x : x;
 }
@@ -244,7 +262,15 @@ function updateLivePreviewSubscriber(subscriber, livePreviewData) {
     if (subscriber.removed || !subscriber.gallery || !livePreviewData) return;
 
     var img = new Image();
+    var revokeLivePreviewUrl = function() {
+        if (img.livePreviewObjectUrl) {
+            URL.revokeObjectURL(img.livePreviewObjectUrl);
+            img.livePreviewObjectUrl = null;
+        }
+    };
+
     img.onload = function() {
+        revokeLivePreviewUrl();
         if (subscriber.removed || !subscriber.gallery) return;
 
         if (!subscriber.livePreview) {
@@ -255,9 +281,19 @@ function updateLivePreviewSubscriber(subscriber, livePreviewData) {
 
         subscriber.livePreview.appendChild(img);
         if (subscriber.livePreview.childElementCount > 2) {
-            subscriber.livePreview.removeChild(subscriber.livePreview.firstElementChild);
+            var removedPreview = subscriber.livePreview.firstElementChild;
+            if (removedPreview.livePreviewObjectUrl) {
+                URL.revokeObjectURL(removedPreview.livePreviewObjectUrl);
+                removedPreview.livePreviewObjectUrl = null;
+            }
+            subscriber.livePreview.removeChild(removedPreview);
         }
     };
+    img.onerror = revokeLivePreviewUrl;
+    if (typeof livePreviewData !== "string") {
+        img.livePreviewObjectUrl = URL.createObjectURL(livePreviewData);
+        livePreviewData = img.livePreviewObjectUrl;
+    }
     img.src = livePreviewData;
 }
 
@@ -320,11 +356,19 @@ function startLivePreviewSessionPolling(session) {
             if (session.stopped) return;
 
             session.livePreviewErrors = 0;
+            var lastLivePreviewId = session.lastLivePreviewId;
             session.lastLivePreviewId = res.id_live_preview;
 
-            if (res.live_preview) {
-                session.subscribers.forEach(function(subscriber) {
-                    updateLivePreviewSubscriber(subscriber, res.live_preview);
+            if (!document.hidden && res.id_live_preview >= 0 && res.id_live_preview !== lastLivePreviewId) {
+                requestBlob("./internal/live-preview", {id_task: session.id_task, id_live_preview: res.id_live_preview}, function(blob) {
+                    if (session.stopped) return;
+
+                    session.subscribers.forEach(function(subscriber) {
+                        updateLivePreviewSubscriber(subscriber, blob);
+                    });
+                }, function() {
+                    if (session.stopped) return;
+                    session.livePreviewErrors += 1;
                 });
             }
 

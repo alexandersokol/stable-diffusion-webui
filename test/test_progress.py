@@ -126,7 +126,7 @@ def test_resize_live_preview_image_caps_largest_side():
     assert resized.size == (512, 256)
 
 
-def test_encode_live_preview_reuses_cached_preview(monkeypatch):
+def test_encode_live_preview_returns_cached_image_bytes(monkeypatch):
     reset_progress_state()
     progress.opts = SimpleNamespace(live_previews_enable=True, live_previews_image_format="png", live_preview_max_size=64)
     shared.state.job_timestamp = "20260621120000"
@@ -140,9 +140,50 @@ def test_encode_live_preview_reuses_cached_preview(monkeypatch):
 
     monkeypatch.setattr(Image.Image, "save", save_once)
 
-    first_preview = progress._encode_live_preview(image, 1)
-    second_preview = progress._encode_live_preview(image, 1)
+    first_preview, first_media_type = progress._encode_live_preview(image, 1)
+    second_preview, second_media_type = progress._encode_live_preview(image, 1)
 
     assert first_preview == second_preview
+    assert isinstance(first_preview, bytes)
+    assert first_preview.startswith(b"\x89PNG")
+    assert first_media_type == "image/png"
+    assert second_media_type == "image/png"
     assert len(save_calls) == 1
     assert save_calls[0] == (64, 32)
+
+
+def test_progress_response_reports_preview_id_without_json_payload(monkeypatch):
+    reset_progress_state()
+    task_id = "task(txt2img-AAAAAAA)"
+    progress.opts = SimpleNamespace(live_previews_enable=True, live_previews_image_format="png", live_preview_max_size=64, progress_restore_image_max_size=1024)
+    progress.start_task(task_id)
+    shared.state.time_start = time.time()
+    shared.state.job_count = 1
+    shared.state.job_no = 0
+    shared.state.sampling_steps = 1
+    shared.state.sampling_step = 0
+    shared.state.id_live_preview = 5
+    shared.state.current_image = Image.new("RGB", (32, 32), "red")
+    monkeypatch.setattr(shared.state, "set_current_image", lambda: None)
+
+    response = progress.progressapi(progress.ProgressRequest(id_task=task_id, id_live_preview=-1, live_preview=True))
+
+    assert response.live_preview is None
+    assert response.id_live_preview == 5
+
+
+def test_progress_live_preview_endpoint_returns_current_preview_bytes(monkeypatch):
+    reset_progress_state()
+    task_id = "task(txt2img-AAAAAAA)"
+    progress.opts = SimpleNamespace(live_previews_enable=True, live_previews_image_format="png", live_preview_max_size=64, progress_restore_image_max_size=1024)
+    progress.start_task(task_id)
+    shared.state.job_timestamp = "20260621120000"
+    shared.state.id_live_preview = 5
+    shared.state.current_image = Image.new("RGB", (32, 32), "blue")
+    monkeypatch.setattr(shared.state, "set_current_image", lambda: None)
+
+    response = progress.live_preview_api(progress.LivePreviewRequest(id_task=task_id, id_live_preview=5))
+
+    assert response.status_code == 200
+    assert response.media_type == "image/png"
+    assert response.body.startswith(b"\x89PNG")

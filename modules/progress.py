@@ -1,4 +1,3 @@
-import base64
 import io
 import threading
 import time
@@ -6,6 +5,7 @@ import time
 import gradio as gr
 from PIL import Image
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from modules.shared import opts
 
@@ -87,6 +87,11 @@ class ProgressRequest(BaseModel):
     live_preview: bool = Field(default=True, title="Include live preview", description="boolean flag indicating whether to include the live preview image")
 
 
+class LivePreviewRequest(BaseModel):
+    id_task: Optional[str] = Field(default=None, title="Task ID", description="id of the task to get live preview for")
+    id_live_preview: int = Field(default=-1, title="Live preview image ID", description="id of requested live preview image")
+
+
 class ProgressResponse(BaseModel):
     id_task: Optional[str] = Field(default=None, title="Task ID")
     task_type: Optional[str] = Field(default=None, title="Task type")
@@ -95,13 +100,14 @@ class ProgressResponse(BaseModel):
     completed: bool = Field(title="Whether the task has already finished")
     progress: float = Field(default=None, title="Progress", description="The progress with a range of 0 to 1")
     eta: float = Field(default=None, title="ETA in secs")
-    live_preview: str = Field(default=None, title="Live preview image", description="Current live preview; a data: uri")
+    live_preview: str = Field(default=None, title="Live preview image", description="Deprecated; live preview image bytes are served by /internal/live-preview")
     id_live_preview: int = Field(default=None, title="Live preview image ID", description="Send this together with next request to prevent receiving same image")
     textinfo: str = Field(default=None, title="Info text", description="Info text used by WebUI.")
 
 
 def setup_progress_api(app):
     app.add_api_route("/internal/pending-tasks", get_pending_tasks, methods=["GET"])
+    app.add_api_route("/internal/live-preview", live_preview_api, methods=["POST"])
     return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=ProgressResponse)
 
 
@@ -162,8 +168,7 @@ def _encode_live_preview(image, id_live_preview):
         save_kwargs = {}
 
     image.save(buffered, format=image_format, **save_kwargs)
-    base64_image = base64.b64encode(buffered.getvalue()).decode('ascii')
-    live_preview = f"data:image/{image_format};base64,{base64_image}"
+    live_preview = (buffered.getvalue(), f"image/{image_format}")
 
     with progress_lock:
         live_preview_cache[cache_key] = live_preview
@@ -171,6 +176,21 @@ def _encode_live_preview(image, id_live_preview):
             live_preview_cache.popitem(last=False)
 
     return live_preview
+
+
+def live_preview_api(req: LivePreviewRequest):
+    with progress_lock:
+        current_task_snapshot = current_task
+        id_live_preview = shared.state.id_live_preview
+        image = shared.state.current_image
+
+    id_task = req.id_task or current_task_snapshot
+
+    if not opts.live_previews_enable or id_task != current_task_snapshot or req.id_live_preview != id_live_preview or image is None:
+        return Response(status_code=204)
+
+    preview_bytes, media_type = _encode_live_preview(image, id_live_preview)
+    return Response(content=preview_bytes, media_type=media_type)
 
 
 def progressapi(req: ProgressRequest):
@@ -218,7 +238,6 @@ def progressapi(req: ProgressRequest):
         if shared.state.id_live_preview != req.id_live_preview:
             image = shared.state.current_image
             if image is not None:
-                live_preview = _encode_live_preview(image, shared.state.id_live_preview)
                 id_live_preview = shared.state.id_live_preview
 
     return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
