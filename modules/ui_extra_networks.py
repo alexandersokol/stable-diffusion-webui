@@ -180,6 +180,40 @@ def fetch_cover_images(page: str = "", item: str = "", index: int = 0):
         raise ValueError(f"File cannot be fetched: {item}. Failed to load cover image.") from err
 
 
+def metadata_has_embedded_cover(metadata):
+    cover_images = metadata.get('ssmd_cover_images')
+    if not isinstance(cover_images, str):
+        return False
+
+    in_string = False
+    escaped = False
+    has_non_empty_string = False
+
+    for char in cover_images:
+        if escaped:
+            if in_string:
+                has_non_empty_string = True
+            escaped = False
+            continue
+
+        if char == "\\":
+            escaped = True
+            continue
+
+        if char == '"':
+            if in_string and has_non_empty_string:
+                return True
+
+            in_string = not in_string
+            has_non_empty_string = False
+            continue
+
+        if in_string:
+            has_non_empty_string = True
+
+    return False
+
+
 def find_page(page: str = ""):
     return next(iter([x for x in extra_pages if x.name == page or x.extra_networks_tabname == page]), None)
 
@@ -851,7 +885,7 @@ class ExtraNetworksPage:
         """
 
         file = f"{path}.safetensors"
-        if self.lister.exists(file) and 'ssmd_cover_images' in metadata and len(list(filter(None, json.loads(metadata['ssmd_cover_images'])))) > 0:
+        if self.lister.exists(file) and metadata_has_embedded_cover(metadata):
             return f"./sd_extra_networks/cover-images?page={self.extra_networks_tabname}&item={name}"
 
         return None

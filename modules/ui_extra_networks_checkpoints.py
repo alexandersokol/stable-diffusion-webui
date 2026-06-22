@@ -27,7 +27,7 @@ class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
             "name": checkpoint.name_for_extra,
             "filename": checkpoint.filename,
             "shorthash": checkpoint.shorthash,
-            "preview": self.find_preview(path),
+            "preview": self.find_preview(path) or self.find_embedded_preview(path, checkpoint.name_for_extra, checkpoint.metadata),
             "description": self.find_description(path),
             "search_terms": search_terms,
             "onclick": html.escape(f"return selectCheckpoint({ui_extra_networks.quote_js(name)})"),

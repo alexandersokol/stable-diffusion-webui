@@ -3,8 +3,13 @@ import sys
 import types
 import json
 import os
+import base64
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
+
+from PIL import Image
 
 
 images_stub = types.ModuleType("modules.images")
@@ -249,3 +254,97 @@ def test_create_dirs_view_html_uses_scandir_without_per_directory_listdir():
         finally:
             ui_extra_networks.os.listdir = original_listdir
             shared.opts = original_opts
+
+
+def test_find_embedded_preview_detects_cover_without_json_loads():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        safetensors_file = root / "model.safetensors"
+        safetensors_file.write_bytes(b"")
+        page = FakeExtraNetworksPage(root, 0)
+        metadata = {"ssmd_cover_images": '["' + ("a" * 100000) + '"]'}
+
+        with mock.patch("modules.ui_extra_networks.json.loads", side_effect=AssertionError("cover detection should not parse JSON")):
+            preview = page.find_embedded_preview(str(root / "model"), "model", metadata)
+
+        assert preview == "./sd_extra_networks/cover-images?page=fake&item=model"
+
+
+def test_fetch_cover_images_decodes_cover_on_demand():
+    image = Image.new("RGB", (1, 1), (255, 0, 0))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded_image = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    page = ui_extra_networks.ExtraNetworksPage("Fake")
+    page.metadata["model"] = {"ssmd_cover_images": json.dumps([encoded_image])}
+    original_pages = list(ui_extra_networks.extra_pages)
+    try:
+        ui_extra_networks.extra_pages.clear()
+        ui_extra_networks.extra_pages.append(page)
+
+        response = ui_extra_networks.fetch_cover_images(page="fake", item="model", index=0)
+
+        assert response.media_type == "image/png"
+        assert response.body.startswith(b"\x89PNG")
+    finally:
+        ui_extra_networks.extra_pages.clear()
+        ui_extra_networks.extra_pages.extend(original_pages)
+
+
+def test_checkpoint_item_uses_embedded_cover_when_sidecar_preview_is_missing():
+    original_sd_models = sys.modules.get("modules.sd_models")
+    original_checkpoint_metadata = sys.modules.get("modules.ui_extra_networks_checkpoints_user_metadata")
+    original_checkpoints_page = sys.modules.get("modules.ui_extra_networks_checkpoints")
+
+    sd_models_stub = types.ModuleType("modules.sd_models")
+    sd_models_stub.checkpoint_aliases = {}
+    sd_models_stub.checkpoints_list = {}
+    sys.modules["modules.sd_models"] = sd_models_stub
+
+    checkpoint_metadata_stub = types.ModuleType("modules.ui_extra_networks_checkpoints_user_metadata")
+    checkpoint_metadata_stub.CheckpointUserMetadataEditor = StubUserMetadataEditor
+    sys.modules["modules.ui_extra_networks_checkpoints_user_metadata"] = checkpoint_metadata_stub
+
+    from modules import ui_extra_networks_checkpoints
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_opts = patch_opts(page_size=2)
+        root = Path(temp_dir)
+        try:
+            checkpoint_path = root / "model.safetensors"
+            checkpoint_path.write_bytes(b"")
+
+            checkpoint = SimpleNamespace(
+                name_for_extra="model",
+                filename=str(checkpoint_path),
+                shorthash="abc123",
+                sha256=None,
+                metadata={"ssmd_cover_images": '["cover"]'},
+            )
+            sd_models_stub.checkpoint_aliases["model"] = checkpoint
+            page = ui_extra_networks_checkpoints.ExtraNetworksPageCheckpoints()
+
+            with (
+                mock.patch.object(page, "allowed_directories_for_previews", return_value=[str(root)]),
+                mock.patch.object(page, "find_preview", return_value=None),
+            ):
+                item = page.create_item("model", index=0)
+
+            assert item["preview"] == "./sd_extra_networks/cover-images?page=checkpoints&item=model"
+        finally:
+            shared.opts = original_opts
+            if original_sd_models is None:
+                sys.modules.pop("modules.sd_models", None)
+            else:
+                sys.modules["modules.sd_models"] = original_sd_models
+
+            if original_checkpoint_metadata is None:
+                sys.modules.pop("modules.ui_extra_networks_checkpoints_user_metadata", None)
+            else:
+                sys.modules["modules.ui_extra_networks_checkpoints_user_metadata"] = original_checkpoint_metadata
+
+            if original_checkpoints_page is None:
+                sys.modules.pop("modules.ui_extra_networks_checkpoints", None)
+            else:
+                sys.modules["modules.ui_extra_networks_checkpoints"] = original_checkpoints_page
