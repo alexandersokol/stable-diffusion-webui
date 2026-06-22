@@ -2,6 +2,7 @@ import tempfile
 import sys
 import types
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -215,4 +216,36 @@ def test_get_page_cards_returns_json_for_next_batch():
         finally:
             ui_extra_networks.extra_pages.clear()
             ui_extra_networks.extra_pages.extend(original_pages)
+            shared.opts = original_opts
+
+
+def test_create_dirs_view_html_uses_scandir_without_per_directory_listdir():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_opts = patch_opts(page_size=2)
+        original_listdir = ui_extra_networks.os.listdir
+        root = Path(temp_dir)
+        try:
+            (root / "empty").mkdir()
+            (root / "nonempty").mkdir()
+            (root / "nonempty" / "child.txt").write_text("x", encoding="utf8")
+            (root / "parent").mkdir()
+            (root / "parent" / "child").mkdir()
+            (root / ".hidden").mkdir()
+            (root / ".hidden" / "child.txt").write_text("hidden", encoding="utf8")
+
+            page = FakeExtraNetworksPage(root, 0)
+
+            def fail_listdir(_path):
+                raise AssertionError("create_dirs_view_html should not call os.listdir")
+
+            ui_extra_networks.os.listdir = fail_listdir
+            html = page.create_dirs_view_html("txt2img")
+
+            assert "all" in html
+            assert "empty" in html
+            assert f"nonempty{os.path.sep}" in html
+            assert f"parent{os.path.sep}" in html
+            assert ".hidden" not in html
+        finally:
+            ui_extra_networks.os.listdir = original_listdir
             shared.opts = original_opts

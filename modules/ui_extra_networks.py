@@ -30,6 +30,50 @@ def allowed_preview_extensions():
     return allowed_preview_extensions_with_extra((shared.opts.samples_format, ))
 
 
+def walk_preview_directories(parentdir):
+    def directory_key(dirname):
+        try:
+            stat = os.stat(dirname)
+            if stat.st_ino:
+                return "stat", stat.st_dev, stat.st_ino
+        except OSError:
+            pass
+
+        return "path", os.path.normcase(os.path.realpath(dirname))
+
+    def walk_entries(entries):
+        dirs = []
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=True):
+                    dirs.append(entry)
+            except OSError:
+                pass
+
+        for entry in sorted(dirs, key=lambda x: shared.natural_sort_key(x.name)):
+            path = entry.path
+            key = directory_key(path)
+            if key in visited_dirs:
+                continue
+
+            visited_dirs.add(key)
+            try:
+                child_entries = list(os.scandir(path))
+            except OSError:
+                child_entries = []
+
+            yield path, len(child_entries) > 0
+            yield from walk_entries(child_entries)
+
+    visited_dirs = {directory_key(parentdir)}
+    try:
+        entries = list(os.scandir(parentdir))
+    except OSError:
+        return
+
+    yield from walk_entries(entries)
+
+
 @dataclass
 class ExtraNetworksItem:
     """Wrapper for dictionaries representing ExtraNetworks items."""
@@ -560,30 +604,23 @@ class ExtraNetworksPage:
 
         subdirs = {}
         for parentdir in [os.path.abspath(x) for x in self.allowed_directories_for_previews()]:
-            for root, dirs, _ in sorted(os.walk(parentdir, followlinks=True), key=lambda x: shared.natural_sort_key(x[0])):
-                for dirname in sorted(dirs, key=shared.natural_sort_key):
-                    x = os.path.join(root, dirname)
+            for x, has_children in walk_preview_directories(parentdir):
+                subdir = os.path.abspath(x)[len(parentdir):]
 
-                    if not os.path.isdir(x):
-                        continue
+                if shared.opts.extra_networks_dir_button_function:
+                    if not subdir.startswith(os.path.sep):
+                        subdir = os.path.sep + subdir
+                else:
+                    while subdir.startswith(os.path.sep):
+                        subdir = subdir[1:]
 
-                    subdir = os.path.abspath(x)[len(parentdir):]
+                if has_children and not subdir.endswith(os.path.sep):
+                    subdir = subdir + os.path.sep
 
-                    if shared.opts.extra_networks_dir_button_function:
-                        if not subdir.startswith(os.path.sep):
-                            subdir = os.path.sep + subdir
-                    else:
-                        while subdir.startswith(os.path.sep):
-                            subdir = subdir[1:]
+                if (os.path.sep + "." in subdir or subdir.startswith(".")) and not shared.opts.extra_networks_show_hidden_directories:
+                    continue
 
-                    is_empty = len(os.listdir(x)) == 0
-                    if not is_empty and not subdir.endswith(os.path.sep):
-                        subdir = subdir + os.path.sep
-
-                    if (os.path.sep + "." in subdir or subdir.startswith(".")) and not shared.opts.extra_networks_show_hidden_directories:
-                        continue
-
-                    subdirs[subdir] = 1
+                subdirs[subdir] = 1
 
         if subdirs:
             subdirs = {"": 1, **subdirs}
