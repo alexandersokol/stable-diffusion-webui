@@ -205,6 +205,36 @@ class CheckpointLookupTests(unittest.TestCase):
         finally:
             metadata_file.unlink(missing_ok=True)
 
+    def test_read_state_dict_uses_load_file_when_safetensors_mmap_is_disabled(self):
+        sd_models = load_sd_models_for_test()
+        sd_models.shared.opts.disable_mmap_load_safetensors = True
+        load_file_calls = []
+
+        class FakeTensor:
+            pass
+
+        def fake_load_file(filename, device):
+            load_file_calls.append((filename, device))
+            return {"weight": FakeTensor()}
+
+        def fail_load(data):
+            raise AssertionError("safetensors.torch.load should not receive whole-file bytes")
+
+        def fail_open(*args, **kwargs):
+            raise AssertionError("disabled mmap safetensors loading should not read the whole file into bytes")
+
+        if not hasattr(sd_models.safetensors, "torch"):
+            sd_models.safetensors.torch = types.SimpleNamespace()
+
+        sd_models.safetensors.torch.load_file = fake_load_file
+        sd_models.safetensors.torch.load = fail_load
+        sd_models.open = fail_open
+
+        state_dict = sd_models.read_state_dict("model.safetensors", map_location="cuda")
+
+        self.assertEqual(load_file_calls, [("model.safetensors", "cuda")])
+        self.assertEqual(list(state_dict), ["weight"])
+
 
 def test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index():
     CheckpointLookupTests("test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index").test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index()
@@ -228,6 +258,10 @@ def test_safetensors_metadata_reader_keeps_oversized_nested_json_as_string():
 
 def test_safetensors_metadata_reader_skips_oversized_thumbnail():
     CheckpointLookupTests("test_safetensors_metadata_reader_skips_oversized_thumbnail").test_safetensors_metadata_reader_skips_oversized_thumbnail()
+
+
+def test_read_state_dict_uses_load_file_when_safetensors_mmap_is_disabled():
+    CheckpointLookupTests("test_read_state_dict_uses_load_file_when_safetensors_mmap_is_disabled").test_read_state_dict_uses_load_file_when_safetensors_mmap_is_disabled()
 
 
 if __name__ == "__main__":
