@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def get_value_for_setting(key):
     value = getattr(opts, key)
+    value = sd_models.checkpoint_title_to_ui_label(value) if key == "sd_model_checkpoint" else value
 
     info = opts.data_labels[key]
     args = info.component_args() if callable(info.component_args) else info.component_args or {}
@@ -21,7 +22,8 @@ def get_value_for_setting(key):
 
 def create_setting_component(key, is_quicksettings=False):
     def fun():
-        return opts.data[key] if key in opts.data else opts.data_labels[key].default
+        value = opts.data[key] if key in opts.data else opts.data_labels[key].default
+        return sd_models.checkpoint_title_to_ui_label(value) if key == "sd_model_checkpoint" else value
 
     info = opts.data_labels[key]
     t = type(info.default)
@@ -79,6 +81,9 @@ class UiSettings:
             if comp == self.dummy_component:
                 continue
 
+            if key == "sd_model_checkpoint":
+                value = sd_models.checkpoint_ui_label_to_title(value)
+
             if opts.set(key, value):
                 changed.append(key)
 
@@ -92,8 +97,11 @@ class UiSettings:
         if not opts.same_type(value, opts.data_labels[key].default):
             return gr.update(visible=True), opts.dumpjson()
 
+        if key == "sd_model_checkpoint":
+            value = sd_models.checkpoint_ui_label_to_title(value)
+
         if value is None or not opts.set(key, value):
-            return gr.update(value=getattr(opts, key)), opts.dumpjson()
+            return get_value_for_setting(key), opts.dumpjson()
 
         opts.save(shared.config_filename)
 

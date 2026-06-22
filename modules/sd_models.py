@@ -156,6 +156,22 @@ def checkpoint_tiles(use_short=False):
     return [x.short_title if use_short else x.title for x in checkpoints_list.values()]
 
 
+def checkpoint_tiles_for_ui():
+    return [x.name_for_extra for x in checkpoints_list.values()]
+
+
+def checkpoint_title_to_ui_label(title):
+    checkpoint_info = checkpoint_aliases.get(title, None)
+
+    return checkpoint_info.name_for_extra if checkpoint_info is not None else title
+
+
+def checkpoint_ui_label_to_title(label):
+    checkpoint_info = get_closet_checkpoint_match(label)
+
+    return checkpoint_info.title if checkpoint_info is not None else label
+
+
 def mark_checkpoint_title_search_index_dirty():
     global checkpoint_title_search_index_dirty
     checkpoint_title_search_index_dirty = True

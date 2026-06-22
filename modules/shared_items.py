@@ -57,6 +57,11 @@ def list_checkpoint_tiles(use_short=False):
     return modules.sd_models.checkpoint_tiles(use_short)
 
 
+def list_checkpoint_tiles_for_ui():
+    import modules.sd_models
+    return modules.sd_models.checkpoint_tiles_for_ui()
+
+
 def refresh_checkpoints():
     import modules.sd_models
     return modules.sd_models.list_models()

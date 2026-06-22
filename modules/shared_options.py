@@ -183,7 +183,7 @@ options_templates.update(options_section(('training', "Training", "training"), {
 }))
 
 options_templates.update(options_section(('sd', "Stable Diffusion", "sd"), {
-    "sd_model_checkpoint": OptionInfo(None, "Stable Diffusion checkpoint", gr.Dropdown, lambda: {"choices": shared_items.list_checkpoint_tiles(shared.opts.sd_checkpoint_dropdown_use_short)}, refresh=shared_items.refresh_checkpoints, infotext='Model hash'),
+    "sd_model_checkpoint": OptionInfo(None, "Stable Diffusion checkpoint", gr.Dropdown, lambda: {"choices": shared_items.list_checkpoint_tiles_for_ui()}, refresh=shared_items.refresh_checkpoints, infotext='Model hash'),
     "sd_checkpoints_limit": OptionInfo(1, "Maximum number of checkpoints loaded at the same time", gr.Slider, {"minimum": 1, "maximum": 10, "step": 1}),
     "sd_checkpoints_max_ram_mb": OptionInfo(0, "Maximum RAM for loaded checkpoint cache, MB", gr.Slider, {"minimum": 0, "maximum": 65536, "step": 512}).info("0 disables the RAM budget; estimates are approximate and the active model is never evicted"),
     "sd_checkpoints_keep_in_cpu": OptionInfo(True, "Only keep one model on device").info("will keep models other than the currently used one in RAM rather than VRAM"),

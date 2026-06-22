@@ -93,6 +93,7 @@ def load_sd_models_for_test(hashes_stub=None):
 class FakeCheckpointInfo:
     def __init__(self, title):
         self.title = title
+        self.name_for_extra = title
 
 
 def write_safetensors_metadata(filename, metadata):
@@ -146,6 +147,32 @@ class CheckpointLookupTests(unittest.TestCase):
         self.assertTrue(sd_models.checkpoint_title_search_index_dirty)
         self.assertIs(sd_models.get_closet_checkpoint_match("new-model"), checkpoint_info)
         self.assertFalse(sd_models.checkpoint_title_search_index_dirty)
+
+    def test_checkpoint_tiles_for_ui_hide_extension_and_hash(self):
+        sd_models = load_sd_models_for_test()
+        checkpoint_info = FakeCheckpointInfo("models/subdir/my_model.safetensors [abc123def0]")
+        checkpoint_info.name_for_extra = "my_model"
+        sd_models.checkpoints_list[checkpoint_info.title] = checkpoint_info
+
+        self.assertEqual(sd_models.checkpoint_tiles_for_ui(), ["my_model"])
+
+    def test_checkpoint_ui_label_round_trips_to_internal_title(self):
+        sd_models = load_sd_models_for_test()
+        checkpoint_info = FakeCheckpointInfo("models/subdir/my_model.safetensors [abc123def0]")
+        checkpoint_info.name_for_extra = "my_model"
+        sd_models.checkpoints_list[checkpoint_info.title] = checkpoint_info
+        sd_models.checkpoint_aliases[checkpoint_info.title] = checkpoint_info
+        sd_models.checkpoint_aliases[checkpoint_info.name_for_extra] = checkpoint_info
+
+        self.assertEqual(
+            sd_models.checkpoint_title_to_ui_label("models/subdir/my_model.safetensors [abc123def0]"),
+            "my_model",
+        )
+        self.assertEqual(
+            sd_models.checkpoint_ui_label_to_title("my_model"),
+            "models/subdir/my_model.safetensors [abc123def0]",
+        )
+        self.assertEqual(sd_models.checkpoint_title_to_ui_label("missing"), "missing")
 
     def test_safetensors_metadata_reader_skips_declared_headers_over_limit(self):
         sd_models = load_sd_models_for_test()
@@ -242,6 +269,14 @@ def test_checkpoint_substring_lookup_uses_prebuilt_shortest_title_index():
 
 def test_checkpoint_registration_marks_title_index_for_lazy_rebuild():
     CheckpointLookupTests("test_checkpoint_registration_marks_title_index_for_lazy_rebuild").test_checkpoint_registration_marks_title_index_for_lazy_rebuild()
+
+
+def test_checkpoint_tiles_for_ui_hide_extension_and_hash():
+    CheckpointLookupTests("test_checkpoint_tiles_for_ui_hide_extension_and_hash").test_checkpoint_tiles_for_ui_hide_extension_and_hash()
+
+
+def test_checkpoint_ui_label_round_trips_to_internal_title():
+    CheckpointLookupTests("test_checkpoint_ui_label_round_trips_to_internal_title").test_checkpoint_ui_label_round_trips_to_internal_title()
 
 
 def test_checkpoint_info_uses_cached_legacy_model_hash():
