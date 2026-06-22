@@ -3,7 +3,7 @@ from collections import namedtuple
 import numpy as np
 import torch
 from PIL import Image
-from modules import devices, images, sd_vae_approx, sd_samplers, sd_vae_taesd, shared, sd_models
+from modules import console_progress, devices, images, sd_vae_approx, sd_samplers, sd_vae_taesd, shared, sd_models
 from modules.shared import opts, state
 import k_diffusion.sampling
 
@@ -269,7 +269,8 @@ class Sampler:
         state.sampling_step = 0
 
         try:
-            return func()
+            with console_progress.generation_tqdm_context(opts, state):
+                return func()
         except RecursionError:
             print(
                 'Encountered RecursionError during sampling, returning last latent. '

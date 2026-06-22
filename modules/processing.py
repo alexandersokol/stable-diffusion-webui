@@ -25,6 +25,7 @@ from modules.shared import opts, cmd_opts, state
 import modules.shared as shared
 import modules.paths as paths
 import modules.face_restoration
+import modules.console_progress as console_progress
 import modules.images as images
 import modules.styles
 import modules.sd_models as sd_models
@@ -714,9 +715,16 @@ def add_finalization_timing_comment(p, timings):
 
 
 def set_console_generation_stage(stage):
+    stage = str(stage or "").strip().upper()
+    if stage == "PREP":
+        console_progress.close_generation_tqdm_bars(shared.opts, state, stage="DONE")
+
     state.set_console_generation_stage(stage)
     if shared.total_tqdm is not None:
         shared.total_tqdm.update_description()
+    console_progress.refresh_generation_tqdm_bars(shared.opts, state)
+    if stage == "DONE":
+        console_progress.close_generation_tqdm_bars(shared.opts, state)
 
 
 def get_fixed_seed(seed):
@@ -1207,6 +1215,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         if opts.return_mask_composite:
                             output_images.append(image_mask_composite)
                             output_image_paths.append(saved_mask_composite_path)
+
+                set_console_generation_stage("DONE")
 
             del x_samples_ddim
 

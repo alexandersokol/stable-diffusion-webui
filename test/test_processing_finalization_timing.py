@@ -32,6 +32,7 @@ sys.modules.setdefault("ldm", types.ModuleType("ldm"))
 sys.modules.setdefault("ldm.data", types.ModuleType("ldm.data"))
 sys.modules.setdefault("ldm.data.util", ldm_data_util_stub)
 ldm_ddpm_stub = types.ModuleType("ldm.models.diffusion.ddpm")
+ldm_ddpm_stub.LatentDiffusion = object
 ldm_ddpm_stub.LatentDepth2ImageDiffusion = object
 sys.modules.setdefault("ldm.models", types.ModuleType("ldm.models"))
 sys.modules.setdefault("ldm.models.diffusion", types.ModuleType("ldm.models.diffusion"))
@@ -47,3 +48,23 @@ def test_add_finalization_timing_comment_records_nonzero_phases():
     processing.add_finalization_timing_comment(p, timings)
 
     assert p.comments == ["Finalization: VAE decode 0.25s, Image save 0.50s"]
+
+
+def test_set_console_generation_stage_can_close_previous_progress(monkeypatch):
+    calls = []
+    fake_state = SimpleNamespace(
+        console_generation_stage="",
+        set_console_generation_stage=lambda stage: setattr(fake_state, "console_generation_stage", stage),
+    )
+    fake_opts = SimpleNamespace()
+
+    monkeypatch.setattr(processing, "state", fake_state)
+    monkeypatch.setattr(processing.shared, "opts", fake_opts)
+    monkeypatch.setattr(processing.shared, "total_tqdm", None)
+    monkeypatch.setattr(processing.console_progress, "close_generation_tqdm_bars", lambda opts, state, stage=None: calls.append(("close", opts, state, stage)))
+    monkeypatch.setattr(processing.console_progress, "refresh_generation_tqdm_bars", lambda opts, state: calls.append(("refresh", opts, state)))
+
+    processing.set_console_generation_stage("PREP")
+
+    assert fake_state.console_generation_stage == "PREP"
+    assert calls == [("close", fake_opts, fake_state, "DONE"), ("refresh", fake_opts, fake_state)]
