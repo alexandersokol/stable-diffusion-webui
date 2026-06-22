@@ -98,6 +98,9 @@ class ProgressResponse(BaseModel):
     active: bool = Field(title="Whether the task is being worked on right now")
     queued: bool = Field(title="Whether the task is in queue")
     completed: bool = Field(title="Whether the task has already finished")
+    interrupted: bool = Field(default=False, title="Whether the current task has been interrupted")
+    skipped: bool = Field(default=False, title="Whether the current task has been asked to skip")
+    stopping_generation: bool = Field(default=False, title="Whether the current task will stop after the current image")
     progress: float = Field(default=None, title="Progress", description="The progress with a range of 0 to 1")
     eta: float = Field(default=None, title="ETA in secs")
     live_preview: str = Field(default=None, title="Live preview image", description="Deprecated; live preview image bytes are served by /internal/live-preview")
@@ -240,7 +243,21 @@ def progressapi(req: ProgressRequest):
             if image is not None:
                 id_live_preview = shared.state.id_live_preview
 
-    return ProgressResponse(id_task=id_task, task_type=task_type, active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
+    return ProgressResponse(
+        id_task=id_task,
+        task_type=task_type,
+        active=active,
+        queued=queued,
+        completed=completed,
+        interrupted=shared.state.interrupted,
+        skipped=shared.state.skipped,
+        stopping_generation=shared.state.stopping_generation,
+        progress=progress,
+        eta=eta,
+        live_preview=live_preview,
+        id_live_preview=id_live_preview,
+        textinfo=shared.state.textinfo,
+    )
 
 
 def restore_progress(id_task):

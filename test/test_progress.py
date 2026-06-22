@@ -172,6 +172,26 @@ def test_progress_response_reports_preview_id_without_json_payload(monkeypatch):
     assert response.id_live_preview == 5
 
 
+def test_progress_response_reports_interruption_flags():
+    reset_progress_state()
+    task_id = "task(txt2img-AAAAAAA)"
+    progress.start_task(task_id)
+    shared.state.time_start = time.time()
+    shared.state.job_count = 1
+    shared.state.job_no = 0
+    shared.state.sampling_steps = 1
+    shared.state.sampling_step = 0
+    shared.state.interrupted = True
+    shared.state.stopping_generation = True
+    shared.state.skipped = True
+
+    response = progress.progressapi(progress.ProgressRequest(id_task=task_id, live_preview=False))
+
+    assert response.interrupted is True
+    assert response.stopping_generation is True
+    assert response.skipped is True
+
+
 def test_progress_live_preview_endpoint_returns_current_preview_bytes(monkeypatch):
     reset_progress_state()
     task_id = "task(txt2img-AAAAAAA)"

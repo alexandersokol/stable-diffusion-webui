@@ -141,6 +141,25 @@ function showSubmitInterruptingPlaceholder(tabname) {
     setSubmitButtonsVisibility(tabname, false, true, true);
 }
 
+function submitButtonStateForProgress(res) {
+    if (res && res.active && (res.interrupted || res.stopping_generation)) {
+        return {showInterrupt: false, showSkip: true, showInterrupting: true};
+    }
+
+    if (res && res.active) {
+        return {showInterrupt: true, showSkip: true, showInterrupting: false};
+    }
+
+    return {showInterrupt: false, showSkip: false, showInterrupting: false};
+}
+
+function syncSubmitButtonsFromProgress(tabname, res) {
+    if (!res || !res.active) return;
+
+    var state = submitButtonStateForProgress(res);
+    setSubmitButtonsVisibility(tabname, state.showInterrupt, state.showSkip, state.showInterrupting);
+}
+
 function showRestoreProgressButton(tabname, show) {
     var button = gradioApp().getElementById(tabname + "_restore_progress");
     if (!button) return;
@@ -324,6 +343,8 @@ function submitCore(args, warnStorage) {
         showSubmitButtons('txt2img', true);
         localRemove("txt2img_task_id");
         showRestoreProgressButton('txt2img', false);
+    }, function(res) {
+        syncSubmitButtonsFromProgress('txt2img', res);
     });
 
     var res = create_submit_args(args);
@@ -359,6 +380,8 @@ function submit_img2img() {
         showSubmitButtons('img2img', true);
         localRemove("img2img_task_id");
         showRestoreProgressButton('img2img', false);
+    }, function(res) {
+        syncSubmitButtonsFromProgress('img2img', res);
     });
 
     var res = create_submit_args(arguments);
@@ -386,8 +409,11 @@ function submit_extras() {
     return res;
 }
 
-function attachProgress(tabname, id) {
+function attachProgress(tabname, id, options) {
     if (!id) return;
+
+    options = options || {};
+    var restoreOnEnd = options.restoreOnEnd !== false;
 
     localSet(tabname + "_task_id", id);
     showRestoreProgressButton(tabname, false);
@@ -395,15 +421,22 @@ function attachProgress(tabname, id) {
 
     requestProgress(id, gradioApp().getElementById(tabname + '_gallery_container'), gradioApp().getElementById(tabname + '_gallery'), function() {
         showSubmitButtons(tabname, true);
-        localRemove(tabname + "_task_id");
-        showRestoreProgressButton(tabname, false);
-    }, null, 0);
+        if (restoreOnEnd) {
+            showRestoreProgressButton(tabname, true);
+        } else {
+            localRemove(tabname + "_task_id");
+            showRestoreProgressButton(tabname, false);
+        }
+    }, function(res) {
+        syncSubmitButtonsFromProgress(tabname, res);
+    }, 0);
 }
 
 function restoreProgressTxt2img() {
     var id = localGet("txt2img_task_id");
 
-    attachProgress("txt2img", id);
+    localRemove("txt2img_task_id");
+    showRestoreProgressButton("txt2img", false);
 
     return id;
 }
@@ -411,7 +444,8 @@ function restoreProgressTxt2img() {
 function restoreProgressImg2img() {
     var id = localGet("img2img_task_id");
 
-    attachProgress("img2img", id);
+    localRemove("img2img_task_id");
+    showRestoreProgressButton("img2img", false);
 
     return id;
 }
@@ -425,12 +459,43 @@ function restoreStoredProgress(tabname) {
     return true;
 }
 
-function attachCurrentServerProgress() {
-    request("./internal/progress", {id_task: null, live_preview: false}, function(res) {
-        if (!res.active || !res.id_task || !["txt2img", "img2img"].includes(res.task_type)) return;
+function isMainGenerationTaskType(taskType) {
+    return ["txt2img", "img2img"].includes(taskType);
+}
 
-        attachProgress(res.task_type, res.id_task);
-    }, function() {});
+function shouldAttachCurrentServerProgress(res) {
+    return !!(res && res.active && res.id_task && isMainGenerationTaskType(res.task_type) && !progressSessions[res.id_task]);
+}
+
+function attachCurrentServerProgress(res) {
+    if (shouldAttachCurrentServerProgress(res)) {
+        attachProgress(res.task_type, res.id_task, {restoreOnEnd: true});
+    }
+}
+
+var currentServerProgressMonitorTimer = null;
+
+function currentServerProgressMonitorPeriod() {
+    return Math.max(opts.live_preview_refresh_period || 1000, 1000);
+}
+
+function scheduleCurrentServerProgressMonitor() {
+    currentServerProgressMonitorTimer = setTimeout(pollCurrentServerProgress, currentServerProgressMonitorPeriod());
+}
+
+function pollCurrentServerProgress() {
+    request("./internal/progress", {id_task: null, live_preview: false}, function(res) {
+        attachCurrentServerProgress(res);
+        scheduleCurrentServerProgressMonitor();
+    }, function() {
+        scheduleCurrentServerProgressMonitor();
+    });
+}
+
+function startCurrentServerProgressMonitor() {
+    if (currentServerProgressMonitorTimer) return;
+
+    pollCurrentServerProgress();
 }
 
 
@@ -459,7 +524,7 @@ function setupResolutionPasting(tabname) {
 onUiLoaded(function() {
     restoreStoredProgress('txt2img');
     restoreStoredProgress('img2img');
-    attachCurrentServerProgress();
+    startCurrentServerProgressMonitor();
     setupResolutionPasting('txt2img');
     setupResolutionPasting('img2img');
 });
