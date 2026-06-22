@@ -17,11 +17,8 @@ def get_matched_noise(_np_src_image, np_mask_rgb, noise_q=1, color_variation=0.0
     # helper fft routines that keep ortho normalization and auto-shift before and after fft
     def _fft2(data):
         if data.ndim > 2:  # has channels
-            out_fft = np.zeros((data.shape[0], data.shape[1], data.shape[2]), dtype=np.complex128)
-            for c in range(data.shape[2]):
-                c_data = data[:, :, c]
-                out_fft[:, :, c] = np.fft.fft2(np.fft.fftshift(c_data), norm="ortho")
-                out_fft[:, :, c] = np.fft.ifftshift(out_fft[:, :, c])
+            out_fft = np.fft.fft2(np.fft.fftshift(data, axes=(0, 1)), axes=(0, 1), norm="ortho")
+            out_fft = np.fft.ifftshift(out_fft, axes=(0, 1))
         else:  # one channel
             out_fft = np.zeros((data.shape[0], data.shape[1]), dtype=np.complex128)
             out_fft[:, :] = np.fft.fft2(np.fft.fftshift(data), norm="ortho")
@@ -31,11 +28,8 @@ def get_matched_noise(_np_src_image, np_mask_rgb, noise_q=1, color_variation=0.0
 
     def _ifft2(data):
         if data.ndim > 2:  # has channels
-            out_ifft = np.zeros((data.shape[0], data.shape[1], data.shape[2]), dtype=np.complex128)
-            for c in range(data.shape[2]):
-                c_data = data[:, :, c]
-                out_ifft[:, :, c] = np.fft.ifft2(np.fft.fftshift(c_data), norm="ortho")
-                out_ifft[:, :, c] = np.fft.ifftshift(out_ifft[:, :, c])
+            out_ifft = np.fft.ifft2(np.fft.fftshift(data, axes=(0, 1)), axes=(0, 1), norm="ortho")
+            out_ifft = np.fft.ifftshift(out_ifft, axes=(0, 1))
         else:  # one channel
             out_ifft = np.zeros((data.shape[0], data.shape[1]), dtype=np.complex128)
             out_ifft[:, :] = np.fft.ifft2(np.fft.fftshift(data), norm="ortho")
@@ -47,26 +41,22 @@ def get_matched_noise(_np_src_image, np_mask_rgb, noise_q=1, color_variation=0.0
         window_scale_x = float(width / min(width, height))
         window_scale_y = float(height / min(width, height))
 
-        window = np.zeros((width, height))
         x = (np.arange(width) / width * 2. - 1.) * window_scale_x
-        for y in range(height):
-            fy = (y / height * 2. - 1.) * window_scale_y
-            if mode == 0:
-                window[:, y] = np.exp(-(x ** 2 + fy ** 2) * std)
-            else:
-                window[:, y] = (1 / ((x ** 2 + 1.) * (fy ** 2 + 1.))) ** (std / 3.14)  # hey wait a minute that's not gaussian
+        y = (np.arange(height) / height * 2. - 1.) * window_scale_y
+
+        if mode == 0:
+            window = np.exp(-((x[:, None] ** 2 + y[None, :] ** 2) * std))
+        else:
+            window = (1 / ((x[:, None] ** 2 + 1.) * (y[None, :] ** 2 + 1.))) ** (std / 3.14)  # hey wait a minute that's not gaussian
 
         return window
 
     def _get_masked_window_rgb(np_mask_grey, hardness=1.):
-        np_mask_rgb = np.zeros((np_mask_grey.shape[0], np_mask_grey.shape[1], 3))
         if hardness != 1.:
             hardened = np_mask_grey[:] ** hardness
         else:
             hardened = np_mask_grey[:]
-        for c in range(3):
-            np_mask_rgb[:, :, c] = hardened[:]
-        return np_mask_rgb
+        return np.repeat(hardened[:, :, None], 3, axis=2)
 
     width = _np_src_image.shape[0]
     height = _np_src_image.shape[1]
@@ -92,12 +82,10 @@ def get_matched_noise(_np_src_image, np_mask_rgb, noise_q=1, color_variation=0.0
     noise_rgb = rng.random((width, height, num_channels))
     noise_grey = (np.sum(noise_rgb, axis=2) / 3.)
     noise_rgb *= color_variation  # the colorfulness of the starting noise is blended to greyscale with a parameter
-    for c in range(num_channels):
-        noise_rgb[:, :, c] += (1. - color_variation) * noise_grey
+    noise_rgb += (1. - color_variation) * noise_grey[:, :, None]
 
     noise_fft = _fft2(noise_rgb)
-    for c in range(num_channels):
-        noise_fft[:, :, c] *= noise_window
+    noise_fft *= noise_window[:, :, None]
     noise_rgb = np.real(_ifft2(noise_fft))
     shaped_noise_fft = _fft2(noise_rgb)
     shaped_noise_fft[:, :, :] = np.absolute(shaped_noise_fft[:, :, :]) ** 2 * (src_dist ** noise_q) * src_phase  # perform the actual shaping
