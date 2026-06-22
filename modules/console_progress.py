@@ -1,4 +1,5 @@
 DEFAULT_MIN_INTERVAL = 0.5
+DEFAULT_BAR_FORMAT = "{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_noinv_fmt}]"
 
 
 def progress_min_interval(opts) -> float:
@@ -18,9 +19,18 @@ def image_count_label(state) -> str:
         return ""
 
     current = max(0, min(current, total))
-    return f"{current}/{total}"
+    return f"[{current}/{total}]"
 
 
-def generation_progress_desc(state, base="Total progress") -> str:
-    label = image_count_label(state)
-    return f"{label} {base}" if label else base
+def stage_label(state) -> str:
+    stage = str(getattr(state, "console_generation_stage", "") or "").strip().upper()
+    return f"[{stage}]" if stage else ""
+
+
+def generation_progress_desc(state) -> str:
+    return image_count_label(state)
+
+
+def generation_progress_bar_format(state) -> str:
+    stage = stage_label(state)
+    return f"{DEFAULT_BAR_FORMAT} {stage}" if stage else DEFAULT_BAR_FORMAT

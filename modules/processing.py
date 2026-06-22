@@ -713,6 +713,12 @@ def add_finalization_timing_comment(p, timings):
         p.comments.append(comment)
 
 
+def set_console_generation_stage(stage):
+    state.set_console_generation_stage(stage)
+    if shared.total_tqdm is not None:
+        shared.total_tqdm.update_description()
+
+
 def get_fixed_seed(seed):
     if seed == '' or seed is None:
         seed = -1
@@ -969,6 +975,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     p.setup_prompts()
     state.setup_console_image_progress(len(p.all_prompts))
     console_image_base = state.console_current_image_count
+    set_console_generation_stage("PREP")
 
     if isinstance(seed, list):
         p.all_seeds = seed
@@ -1018,7 +1025,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
             p.seeds = p.all_seeds[n * p.batch_size:(n + 1) * p.batch_size]
             p.subseeds = p.all_subseeds[n * p.batch_size:(n + 1) * p.batch_size]
-            state.set_console_image_progress(current=console_image_base + min((n + 1) * p.batch_size, len(p.all_prompts)))
+            state.set_console_image_progress(current=console_image_base + min(n * p.batch_size + 1, len(p.all_prompts)))
+            set_console_generation_stage("PREP")
 
             latent_channels = getattr(shared.sd_model, 'latent_channels', opt_C)
             p.rng = rng.ImageRNG((latent_channels, p.height // opt_f, p.width // opt_f), p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)
@@ -1058,6 +1066,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             sd_models.apply_alpha_schedule_override(p.sd_model, p)
 
+            set_console_generation_stage("SAMPLING")
             with devices.without_autocast() if devices.unet_needs_upcast else devices.autocast():
                 samples_ddim = p.sample(conditioning=p.c, unconditional_conditioning=p.uc, seeds=p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, prompts=p.prompts)
 
@@ -1073,6 +1082,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
                 if opts.sd_vae_decode_method != 'Full':
                     p.extra_generation_params['VAE Decoder'] = opts.sd_vae_decode_method
+                set_console_generation_stage("VAE")
                 finalization_start = time.perf_counter()
                 x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
                 add_timing(finalization_timings, "VAE decode", time.perf_counter() - finalization_start)
@@ -1105,6 +1115,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             save_samples = p.save_samples()
 
             def save_image_timed(*args, **kwargs):
+                set_console_generation_stage("SAVING")
                 finalization_start = time.perf_counter()
                 result = images.save_image(*args, **kwargs)
                 add_timing(finalization_timings, "Image save", time.perf_counter() - finalization_start)
@@ -1112,6 +1123,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             for i, x_sample in enumerate(x_samples_ddim):
                 p.batch_index = i
+                state.set_console_image_progress(current=console_image_base + min(n * p.batch_size + i + 1, len(p.all_prompts)))
+                set_console_generation_stage("POST")
 
                 finalization_start = time.perf_counter()
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
@@ -1207,6 +1220,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         index_of_first_image = 0
         unwanted_grid_because_of_img_count = len(output_images) < 2 and opts.grid_only_if_multiple
         if (opts.return_grid or opts.grid_save) and not p.do_not_save_grid and not unwanted_grid_because_of_img_count:
+            set_console_generation_stage("GRID")
             grid = images.image_grid(output_images, p.batch_size)
 
             if opts.return_grid:
@@ -1242,6 +1256,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         p.scripts.postprocess(p, res)
 
     processing_output.replace_saved_images_with_placeholders(p, res, output_image_paths)
+    set_console_generation_stage("DONE")
 
     return res
 

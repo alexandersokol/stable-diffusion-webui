@@ -14,6 +14,7 @@ class TotalTQDM:
             position=1,
             file=shared.progress_print_out,
             mininterval=console_progress.progress_min_interval(shared.opts),
+            bar_format=console_progress.generation_progress_bar_format(shared.state),
         )
 
     def update_description(self):
@@ -23,6 +24,11 @@ class TotalTQDM:
         desc = console_progress.generation_progress_desc(shared.state)
         if self._tqdm.desc != desc:
             self._tqdm.set_description_str(desc, refresh=False)
+
+        bar_format = console_progress.generation_progress_bar_format(shared.state)
+        if self._tqdm.bar_format != bar_format:
+            self._tqdm.bar_format = bar_format
+            self._tqdm.refresh()
 
     def update(self):
         if not shared.opts.multiple_tqdm or shared.cmd_opts.disable_console_progressbars:

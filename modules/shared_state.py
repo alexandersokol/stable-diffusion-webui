@@ -22,6 +22,7 @@ class State:
     sampling_steps = 0
     console_current_image_count = 0
     console_total_image_count = 0
+    console_generation_stage = ""
     current_latent = None
     current_image = None
     current_image_sampling_step = 0
@@ -118,6 +119,7 @@ class State:
     def reset_console_image_progress(self):
         self.console_current_image_count = 0
         self.console_total_image_count = 0
+        self.console_generation_stage = ""
 
     def set_console_image_progress(self, *, current=None, total=None):
         if total is not None:
@@ -129,6 +131,9 @@ class State:
     def setup_console_image_progress(self, total):
         if self.console_total_image_count <= 0:
             self.set_console_image_progress(current=0, total=total)
+
+    def set_console_generation_stage(self, stage):
+        self.console_generation_stage = str(stage or "").strip().upper()
 
     def begin(self, job: str = "(unknown)"):
         self.sampling_step = 0

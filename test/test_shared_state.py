@@ -22,3 +22,14 @@ def test_end_clears_current_preview(monkeypatch):
     assert state.current_image is None
     assert state.current_image_sampling_step == 0
     assert state.id_live_preview == 0
+
+
+def test_console_generation_stage_resets_with_console_progress():
+    state = State()
+
+    state.set_console_generation_stage("SAMPLING")
+    assert state.console_generation_stage == "SAMPLING"
+
+    state.reset_console_image_progress()
+
+    assert state.console_generation_stage == ""
