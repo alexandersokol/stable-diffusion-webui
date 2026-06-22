@@ -146,9 +146,8 @@ def save_files(js_data, images, do_make_zip, index):
 
         from zipfile import ZipFile
         with ZipFile(zip_filepath, "w") as zip_file:
-            for i in range(len(fullfns)):
-                with open(fullfns[i], mode="rb") as f:
-                    zip_file.writestr(filenames[i], f.read())
+            for fullfn, filename in zip(fullfns, filenames):
+                zip_file.write(fullfn, filename)
         fullfns.insert(0, zip_filepath)
 
     return gr.File.update(value=fullfns, visible=True), plaintext_to_html(f"Saved: {filenames[0]}")
