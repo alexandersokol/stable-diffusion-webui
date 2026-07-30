@@ -165,3 +165,142 @@ def test_restore_source_region_soft_resynthesis_returns_generated_copy():
 
     assert restored.tobytes() == generated.tobytes()
     assert restored is not generated
+
+
+class FakeProcessed:
+    def __init__(self, _p, images, seed, info, **kwargs):
+        self.images = images
+        self.seed = seed
+        self.info = info
+        self.all_seeds = kwargs.get("all_seeds")
+        self.infotexts = kwargs.get("infotexts")
+
+
+def make_p(source):
+    return types.SimpleNamespace(
+        prompt="base prompt",
+        init_images=[source],
+        image_mask=None,
+        width=64,
+        height=64,
+        n_iter=2,
+        batch_size=3,
+        do_not_save_grid=False,
+        do_not_save_samples=False,
+        mask_blur=9,
+        inpainting_fill=2,
+        extra_generation_params={},
+        outpath_samples="samples",
+        seed=42,
+    )
+
+
+def test_run_generates_all_final_placements_and_saves_without_grid():
+    mk4 = load_mk4_module_for_test()
+    calls = []
+    saved = []
+
+    def fake_process(p):
+        calls.append((p.init_images[0].size, p.image_mask.size, p.width, p.height, p.do_not_save_grid))
+        seed = 100 + len(calls)
+        color = (seed, 0, 0)
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), color)], seed, f"info-{seed}")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=True, samples_format="png")
+    mk4.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append((image.size, seed, info, p.do_not_save_grid))
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+
+    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert len(result.images) == 5
+    assert result.all_seeds == [101, 102, 103, 104, 105]
+    assert result.infotexts == ["info-101", "info-102", "info-103", "info-104", "info-105"]
+    assert calls == [((4, 8), (4, 8), 4, 8, True)] * 5
+    assert saved == [((4, 8), seed, f"info-{seed}", True) for seed in result.all_seeds]
+
+
+def test_run_preserves_source_pixels_or_leaves_soft_resynthesis_generated():
+    mk4 = load_mk4_module_for_test()
+
+    def fake_process(p):
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    source = Image.new("RGB", (2, 4), "red")
+
+    preserve = mk4.Script().run(make_p(source), 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    soft = mk4.Script().run(make_p(source), 8, "Centered", "Soft resynthesis", 1, 4, 0, False, "")
+
+    assert preserve.images[0].getpixel((0, 2)) == (255, 0, 0)
+    assert preserve.images[0].getpixel((0, 3)) == (255, 0, 0)
+    assert soft.images[0].getpixel((0, 2)) == (0, 0, 255)
+
+
+def test_run_soft_resynthesis_forces_original_masked_content():
+    mk4 = load_mk4_module_for_test()
+    inpainting_fill_values = []
+
+    def fake_process(p):
+        inpainting_fill_values.append(p.inpainting_fill)
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+
+    mk4.Script().run(make_p(Image.new("RGB", (2, 4), "red")), 8, "Centered", "Soft resynthesis", 1, 4, 3, False, "")
+
+    assert inpainting_fill_values == [mk4.SOFT_RESYNTHESIS_INPAINTING_FILL]
+
+
+def test_run_injects_continue_prompt_and_restores_processing_state():
+    mk4 = load_mk4_module_for_test()
+    prompts_seen = []
+
+    def fake_process(p):
+        prompts_seen.append(p.prompt)
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+    original_init_images = p.init_images
+
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, True, "continue naturally")
+
+    assert prompts_seen == ["base prompt, continue naturally"]
+    assert p.prompt == "base prompt"
+    assert p.init_images is original_init_images
+    assert p.image_mask is None
+    assert p.width == 64
+    assert p.height == 64
+    assert p.n_iter == 2
+    assert p.batch_size == 3
+    assert p.do_not_save_grid is False
+    assert p.do_not_save_samples is False
+    assert p.mask_blur == 9
+    assert p.inpainting_fill == 2
+
+
+def test_run_returns_clear_errors_for_missing_source_and_small_target():
+    mk4 = load_mk4_module_for_test()
+    mk4.Processed = FakeProcessed
+
+    missing = make_p(Image.new("RGB", (2, 4), "red"))
+    missing.init_images = []
+    missing_result = mk4.Script().run(missing, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    small = make_p(Image.new("RGB", (2, 4), "red"))
+    small_result = mk4.Script().run(small, 2, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert missing_result.info == "Vertical Outpainting Mk4 requires one source image."
+    assert small_result.info == "Target height must be greater than or equal to the source image height."
