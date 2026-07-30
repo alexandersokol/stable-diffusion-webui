@@ -83,46 +83,54 @@ def _round_up_to_64(value):
     return math.ceil(value / 64) * 64
 
 
+def _safe_overlap(expand_pixels, tile_w, tile_h):
+    return max(0, min(int(expand_pixels), int(tile_w) - 1, int(tile_h) - 1))
+
+
 def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur):
     initial_seed = None
     initial_info = None
     up = int(expand_pixels) if pass_direction == "up" else 0
     down = int(expand_pixels) if pass_direction == "down" else 0
 
-    target_w = _round_up_to_64(init_img.width)
-    target_h = _round_up_to_64(init_img.height + up + down)
+    logical_w = init_img.width
+    logical_h = init_img.height + up + down
+    logical_img = Image.new("RGB", (logical_w, logical_h))
+    logical_img.paste(init_img, (0, up))
 
-    if up > 0:
-        up = up * (target_h - init_img.height) // (up + down)
-    if down > 0:
-        down = target_h - init_img.height - up
-
+    target_w = _round_up_to_64(logical_w)
+    target_h = _round_up_to_64(logical_h)
     img = Image.new("RGB", (target_w, target_h))
-    img.paste(init_img, ((target_w - init_img.width) // 2, up))
+    img.paste(logical_img, (0, 0))
 
-    mask = Image.new("L", (img.width, img.height), "white")
-    draw = ImageDraw.Draw(mask)
+    logical_mask = Image.new("L", logical_img.size, "white")
+    draw = ImageDraw.Draw(logical_mask)
     draw.rectangle((
         0,
         up + (mask_blur * 2 if up > 0 else 0),
-        mask.width,
-        mask.height - down - (mask_blur * 2 if down > 0 else 0),
+        logical_mask.width,
+        logical_mask.height - down - (mask_blur * 2 if down > 0 else 0),
     ), fill="black")
+    mask = Image.new("L", img.size, "white")
+    mask.paste(logical_mask, (0, 0))
 
-    latent_mask = Image.new("L", (img.width, img.height), "white")
-    latent_draw = ImageDraw.Draw(latent_mask)
+    logical_latent_mask = Image.new("L", logical_img.size, "white")
+    latent_draw = ImageDraw.Draw(logical_latent_mask)
     latent_draw.rectangle((
         0,
         up + (mask_blur // 2 if up > 0 else 0),
-        latent_mask.width,
-        latent_mask.height - down - (mask_blur // 2 if down > 0 else 0),
+        logical_latent_mask.width,
+        logical_latent_mask.height - down - (mask_blur // 2 if down > 0 else 0),
     ), fill="black")
+    latent_mask = Image.new("L", img.size, "white")
+    latent_mask.paste(logical_latent_mask, (0, 0))
 
     devices.torch_gc()
 
-    grid = images.split_grid(img, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
-    grid_mask = images.split_grid(mask, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
-    grid_latent_mask = images.split_grid(latent_mask, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
+    overlap = _safe_overlap(expand_pixels, p.width, p.height)
+    grid = images.split_grid(img, tile_w=p.width, tile_h=p.height, overlap=overlap)
+    grid_mask = images.split_grid(mask, tile_w=p.width, tile_h=p.height, overlap=overlap)
+    grid_latent_mask = images.split_grid(latent_mask, tile_w=p.width, tile_h=p.height, overlap=overlap)
 
     work = []
     work_mask = []
@@ -131,7 +139,7 @@ def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur)
 
     for (y, h, row), (_, _, row_mask), (_, _, row_latent_mask) in zip(grid.tiles, grid_mask.tiles, grid_latent_mask.tiles):
         for tiledata, tiledata_mask, tiledata_latent_mask in zip(row, row_mask, row_latent_mask):
-            tile_inside_original_vertical = y >= up and y + h <= img.height - down
+            tile_inside_original_vertical = y >= up and y + h <= up + init_img.height
             if tile_inside_original_vertical:
                 continue
 
@@ -159,7 +167,7 @@ def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur)
     image_index = 0
     for y, h, row in grid.tiles:
         for tiledata in row:
-            tile_inside_original_vertical = y >= up and y + h <= img.height - down
+            tile_inside_original_vertical = y >= up and y + h <= up + init_img.height
             if tile_inside_original_vertical:
                 continue
 
@@ -167,7 +175,7 @@ def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur)
             image_index += 1
 
     combined_image = images.combine_grid(grid)
-    return combined_image.crop((0, 0, target_w, init_img.height + up + down)), initial_seed, initial_info
+    return combined_image.crop((0, 0, logical_w, logical_h)), initial_seed, initial_info
 
 
 class Script(scripts.Script):
@@ -205,7 +213,8 @@ class Script(scripts.Script):
 
         sequences = build_shift_sequences(direction, shift_preset, int(pixels))
         if not sequences:
-            return Processed(p, [], p.seed, "No vertical outpainting direction selected.")
+            message = "No vertical outpainting direction selected." if not direction else "Selected shift preset is not available for the chosen outpainting directions."
+            return Processed(p, [], p.seed, message)
 
         p.extra_generation_params["Vertical Outpainting MK3 pixels"] = int(pixels)
         p.extra_generation_params["Vertical Outpainting MK3 directions"] = ", ".join(direction or [])
@@ -229,25 +238,29 @@ class Script(scripts.Script):
             state.job_count = sum(len(passes) for _, passes in sequences)
 
             final_images = []
-            initial_seed = None
-            initial_info = None
+            variant_seeds = []
+            variant_infos = []
 
             for preset_name, passes in sequences:
                 current_image = prepared_image.copy()
+                preset_seed = None
+                preset_info = None
                 for pass_index, (pass_direction, pass_pixels) in enumerate(passes):
                     state.job = f"{preset_name}: pass {pass_index + 1} out of {len(passes)}"
                     current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur)
-                    if initial_seed is None and pass_seed is not None:
-                        initial_seed = pass_seed
-                        initial_info = pass_info
+                    if preset_seed is None and pass_seed is not None:
+                        preset_seed = pass_seed
+                        preset_info = pass_info
 
                 final_images.append(current_image)
+                variant_seeds.append(preset_seed)
+                variant_infos.append(preset_info)
 
             if opts.samples_save:
-                for image in final_images:
-                    images.save_image(image, p.outpath_samples, "", initial_seed, original_prompt, opts.samples_format, info=initial_info, p=p)
+                for image, seed, info in zip(final_images, variant_seeds, variant_infos):
+                    images.save_image(image, p.outpath_samples, "", seed, original_prompt, opts.samples_format, info=info, p=p)
 
-            return Processed(p, final_images, initial_seed, initial_info)
+            return Processed(p, final_images, variant_seeds[0], variant_infos[0], all_seeds=variant_seeds, infotexts=variant_infos)
         finally:
             p.prompt = original_prompt
             p.init_images = original_init_images
