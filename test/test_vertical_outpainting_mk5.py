@@ -192,7 +192,12 @@ def test_run_generates_one_final_image_restores_source_and_saves():
 
     def fake_process(p):
         calls.append((p.init_images[0].size, p.image_mask.size, p.width, p.height, p.inpainting_mask_invert, p.do_not_save_grid))
-        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+        return FakeProcessed(
+            p,
+            [Image.new("RGB", (p.width, p.height), "blue"), Image.new("RGB", (p.width, p.height), "green")],
+            101,
+            "info-101",
+        )
 
     mk5.Processed = FakeProcessed
     mk5.process_images = fake_process
@@ -227,6 +232,32 @@ def test_run_no_gap_returns_source_only_without_processing():
     assert len(result.images) == 1
     assert result.images[0].size == (4, 4)
     assert result.images[0].tobytes() == source.tobytes()
+
+
+def test_run_scale_one_returns_prepared_source_only_without_processing():
+    mk5 = load_mk5_module_for_test()
+    calls = []
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda _p: calls.append("called")
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    source = Image.new("RGB", (4, 4), "red")
+
+    result = mk5.Script().run(make_p(source), 8, 1.0, "Center", 1, 4, 0, False, "")
+
+    assert calls == []
+    assert len(result.images) == 1
+    assert result.images[0].size == (4, 8)
+    assert [result.images[0].getpixel((0, y)) for y in range(8)] == [
+        (0, 0, 0),
+        (0, 0, 0),
+        (255, 0, 0),
+        (255, 0, 0),
+        (255, 0, 0),
+        (255, 0, 0),
+        (0, 0, 0),
+        (0, 0, 0),
+    ]
 
 
 def test_run_empty_generation_returns_no_placeholder_and_saves_nothing():
