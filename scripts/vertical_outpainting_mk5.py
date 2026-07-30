@@ -109,3 +109,108 @@ class Script(scripts.Script):
 
     def show(self, is_img2img):
         return is_img2img
+
+    def ui(self, is_img2img):
+        if not is_img2img:
+            return None
+
+        target_height = gr.Slider(label="Target height", minimum=64, maximum=4096, step=64, value=2048, elem_id=self.elem_id("target_height"))
+        scale = gr.Slider(label="Scale", minimum=0.0, maximum=1.0, step=0.05, value=0.0, elem_id=self.elem_id("scale"))
+        placement = gr.Dropdown(label="Placement", choices=PLACEMENT_CHOICES, value="Center", elem_id=self.elem_id("placement"))
+        seam_size = gr.Slider(label="Seam size", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("seam_size"))
+        mask_blur = gr.Slider(label="Mask blur", minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
+        inpainting_fill = gr.Radio(label="Masked content", choices=MASKED_CONTENT_CHOICES, value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
+        inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
+        continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
+
+        return [target_height, scale, placement, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt]
+
+    def run(self, p, target_height, scale, placement, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt):
+        if not getattr(p, "init_images", None):
+            return Processed(p, [], p.seed, "Vertical Outpainting Mk5 requires one source image.")
+
+        source = p.init_images[0].convert("RGB")
+        target_height = int(target_height)
+        if target_height < source.height:
+            return Processed(p, [], p.seed, "Target height must be greater than or equal to the source image height.")
+
+        prepared_source = source if float(scale) == 1.0 else prepare_scaled_source(source, target_height, scale)
+        source_top = compute_vertical_offset(prepared_source.height, target_height, placement)
+        target_canvas = create_target_canvas(prepared_source, target_height, source_top)
+        mask = build_outpaint_mask(prepared_source.size, target_height, source_top, seam_size)
+
+        original_prompt = p.prompt
+        original_init_images = p.init_images
+        original_image_mask = getattr(p, "image_mask", None)
+        original_width = p.width
+        original_height = p.height
+        original_n_iter = p.n_iter
+        original_batch_size = p.batch_size
+        original_do_not_save_grid = p.do_not_save_grid
+        original_do_not_save_samples = p.do_not_save_samples
+        original_mask_blur = p.mask_blur
+        original_inpainting_fill = p.inpainting_fill
+        has_inpainting_mask_invert = hasattr(p, "inpainting_mask_invert")
+        original_inpainting_mask_invert = getattr(p, "inpainting_mask_invert", None)
+        has_inpaint_full_res = hasattr(p, "inpaint_full_res")
+        original_inpaint_full_res = getattr(p, "inpaint_full_res", None)
+
+        p.extra_generation_params["Vertical Outpainting MK5 target height"] = target_height
+        p.extra_generation_params["Vertical Outpainting MK5 scale"] = float(scale)
+        p.extra_generation_params["Vertical Outpainting MK5 placement"] = placement
+        p.extra_generation_params["Vertical Outpainting MK5 seam size"] = int(seam_size)
+        p.extra_generation_params["Vertical Outpainting MK5 mask blur"] = int(mask_blur)
+        p.extra_generation_params["Vertical Outpainting MK5 continue prompt injected"] = bool(inject_continue_prompt)
+
+        try:
+            if float(scale) == 1.0 or not mask_has_white(mask):
+                final_image = target_canvas
+                if should_save_final_samples(opts, state, original_do_not_save_samples):
+                    images.save_image(final_image, p.outpath_samples, "", p.seed, original_prompt, opts.samples_format, info="", p=p)
+                return Processed(p, [final_image], p.seed, "", all_seeds=[p.seed], infotexts=[""])
+
+            if inject_continue_prompt:
+                p.prompt = _append_continue_prompt(p.prompt, continue_prompt)
+
+            p.n_iter = 1
+            p.batch_size = 1
+            p.do_not_save_grid = True
+            p.do_not_save_samples = True
+            p.width = source.width
+            p.height = target_height
+            p.mask_blur = int(mask_blur)
+            p.inpainting_fill = inpainting_fill
+            p.inpainting_mask_invert = 0
+            state.job_count = 1
+            state.job = "Vertical Outpainting Mk5: final canvas"
+
+            p.init_images = [target_canvas]
+            p.image_mask = mask
+            processed = process_images(p)
+
+            if not processed.images:
+                return Processed(p, [], p.seed, "Vertical Outpainting Mk5 generation returned no images.", all_seeds=[], infotexts=[])
+
+            final_image = restore_prepared_source(processed.images[0], prepared_source, source_top)
+            if should_save_final_samples(opts, state, original_do_not_save_samples):
+                images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=processed.info, p=p)
+
+            return Processed(p, [final_image], processed.seed, processed.info, all_seeds=[processed.seed], infotexts=[processed.info])
+        finally:
+            p.prompt = original_prompt
+            p.init_images = original_init_images
+            p.image_mask = original_image_mask
+            p.width = original_width
+            p.height = original_height
+            p.n_iter = original_n_iter
+            p.batch_size = original_batch_size
+            p.do_not_save_grid = original_do_not_save_grid
+            p.do_not_save_samples = original_do_not_save_samples
+            p.mask_blur = original_mask_blur
+            p.inpainting_fill = original_inpainting_fill
+            if has_inpainting_mask_invert:
+                p.inpainting_mask_invert = original_inpainting_mask_invert
+            elif hasattr(p, "inpainting_mask_invert"):
+                delattr(p, "inpainting_mask_invert")
+            if has_inpaint_full_res:
+                p.inpaint_full_res = original_inpaint_full_res
