@@ -199,6 +199,9 @@ class Script(scripts.Script):
         original_batch_size = p.batch_size
         original_do_not_save_grid = p.do_not_save_grid
         original_do_not_save_samples = p.do_not_save_samples
+        original_mask_blur = p.mask_blur
+        original_inpainting_fill = p.inpainting_fill
+        original_inpaint_full_res = p.inpaint_full_res
 
         sequences = build_shift_sequences(direction, shift_preset, int(pixels))
         if not sequences:
@@ -252,3 +255,6 @@ class Script(scripts.Script):
             p.batch_size = original_batch_size
             p.do_not_save_grid = original_do_not_save_grid
             p.do_not_save_samples = original_do_not_save_samples
+            p.mask_blur = original_mask_blur
+            p.inpainting_fill = original_inpainting_fill
+            p.inpaint_full_res = original_inpaint_full_res
