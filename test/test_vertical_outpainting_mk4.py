@@ -304,3 +304,39 @@ def test_run_returns_clear_errors_for_missing_source_and_small_target():
 
     assert missing_result.info == "Vertical Outpainting Mk4 requires one source image."
     assert small_result.info == "Target height must be greater than or equal to the source image height."
+
+
+def test_run_records_mk4_generation_metadata_and_respects_explicit_placement():
+    mk4 = load_mk4_module_for_test()
+    masks = []
+
+    def fake_process(p):
+        masks.append(p.image_mask.copy())
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+
+    result = mk4.Script().run(p, 8, "Bottom", "Blend seam only", 1, 4, 0, True, "continue naturally")
+
+    assert len(result.images) == 1
+    assert mask_values_by_row(masks[0]) == [255, 255, 255, 255, 255, 0, 0, 0]
+    assert p.extra_generation_params["Vertical Outpainting MK4 target height"] == 8
+    assert p.extra_generation_params["Vertical Outpainting MK4 source placement"] == "Bottom"
+    assert p.extra_generation_params["Vertical Outpainting MK4 source handling"] == "Blend seam only"
+    assert p.extra_generation_params["Vertical Outpainting MK4 seam size"] == 1
+    assert p.extra_generation_params["Vertical Outpainting MK4 mask blur"] == 4
+    assert p.extra_generation_params["Vertical Outpainting MK4 continue prompt injected"] is True
+
+
+def test_seam_size_is_clamped_to_source_height():
+    mk4 = load_mk4_module_for_test()
+
+    mask = mk4.build_source_mask((2, 4), 8, 2, "Blend seam only", 999)
+    restored = mk4.restore_source_region(Image.new("RGB", (2, 8), "blue"), Image.new("RGB", (2, 4), "red"), 2, "Blend seam only", 999)
+
+    assert mask_values_by_row(mask) == [255] * 8
+    assert restored.tobytes() == Image.new("RGB", (2, 8), "blue").tobytes()
