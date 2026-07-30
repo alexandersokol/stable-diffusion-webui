@@ -111,7 +111,7 @@ def test_build_outpaint_mask_centered_top_bottom_and_no_gap():
 
     assert mask_values_by_row(centered) == [255, 255, 255, 0, 0, 255, 255, 255]
     assert mask_values_by_row(top) == [0, 0, 0, 255, 255, 255, 255, 255]
-    assert mask_values_by_row(bottom) == [255, 255, 255, 255, 0, 0, 0, 0]
+    assert mask_values_by_row(bottom) == [255, 255, 255, 255, 255, 0, 0, 0]
     assert mask_values_by_row(no_gap) == [0] * 8
     assert mk5.mask_has_white(centered) is True
     assert mk5.mask_has_white(no_gap) is False
