@@ -134,7 +134,7 @@ class Script(scripts.Script):
         if target_height < source.height:
             return Processed(p, [], p.seed, "Target height must be greater than or equal to the source image height.")
 
-        prepared_source = source if float(scale) == 1.0 else prepare_scaled_source(source, target_height, scale)
+        prepared_source = prepare_scaled_source(source, target_height, scale)
         source_top = compute_vertical_offset(prepared_source.height, target_height, placement)
         target_canvas = create_target_canvas(prepared_source, target_height, source_top)
         mask = build_outpaint_mask(prepared_source.size, target_height, source_top, seam_size)

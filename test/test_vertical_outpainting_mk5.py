@@ -241,23 +241,18 @@ def test_run_scale_one_returns_prepared_source_only_without_processing():
     mk5.process_images = lambda _p: calls.append("called")
     mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
-    source = Image.new("RGB", (4, 4), "red")
+    source = Image.new("RGB", (4, 4))
+    for y in range(source.height):
+        for x in range(source.width):
+            source.putpixel((x, y), (x * 40, y * 60, 0))
 
     result = mk5.Script().run(make_p(source), 8, 1.0, "Center", 1, 4, 0, False, "")
 
     assert calls == []
     assert len(result.images) == 1
     assert result.images[0].size == (4, 8)
-    assert [result.images[0].getpixel((0, y)) for y in range(8)] == [
-        (0, 0, 0),
-        (0, 0, 0),
-        (255, 0, 0),
-        (255, 0, 0),
-        (255, 0, 0),
-        (255, 0, 0),
-        (0, 0, 0),
-        (0, 0, 0),
-    ]
+    assert result.images[0].tobytes() == mk5.prepare_scaled_source(source, 8, 1.0).tobytes()
+    assert result.images[0].getbbox() == (0, 0, 4, 8)
 
 
 def test_run_empty_generation_returns_no_placeholder_and_saves_nothing():
