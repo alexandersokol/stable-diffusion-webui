@@ -3,7 +3,7 @@ import modules.scripts as scripts
 from PIL import Image, ImageDraw
 
 from modules import images
-from modules.processing import Processed, process_images
+from modules.processing import Processed, create_infotext, process_images
 from modules.shared import opts, state
 
 
@@ -148,7 +148,11 @@ class Script(scripts.Script):
         original_batch_size = p.batch_size
         original_do_not_save_grid = p.do_not_save_grid
         original_do_not_save_samples = p.do_not_save_samples
-        original_mask_blur = p.mask_blur
+        has_mask_blur_x = hasattr(p, "mask_blur_x")
+        original_mask_blur_x = getattr(p, "mask_blur_x", None)
+        has_mask_blur_y = hasattr(p, "mask_blur_y")
+        original_mask_blur_y = getattr(p, "mask_blur_y", None)
+        original_mask_blur = getattr(p, "mask_blur", None)
         original_inpainting_fill = p.inpainting_fill
         has_inpainting_mask_invert = hasattr(p, "inpainting_mask_invert")
         original_inpainting_mask_invert = getattr(p, "inpainting_mask_invert", None)
@@ -165,9 +169,18 @@ class Script(scripts.Script):
         try:
             if float(scale) == 1.0 or not mask_has_white(mask):
                 final_image = target_canvas
+                p.width, p.height = final_image.size
+                infotext = create_infotext(
+                    p,
+                    [original_prompt],
+                    [p.seed],
+                    [p.subseed],
+                    comments=[],
+                    all_negative_prompts=[p.negative_prompt],
+                )
                 if should_save_final_samples(opts, state, original_do_not_save_samples):
-                    images.save_image(final_image, p.outpath_samples, "", p.seed, original_prompt, opts.samples_format, info="", p=p)
-                return Processed(p, [final_image], p.seed, "", all_seeds=[p.seed], infotexts=[""])
+                    images.save_image(final_image, p.outpath_samples, "", p.seed, original_prompt, opts.samples_format, info=infotext, p=p)
+                return Processed(p, [final_image], p.seed, infotext, all_seeds=[p.seed], infotexts=[infotext])
 
             if inject_continue_prompt:
                 p.prompt = _append_continue_prompt(p.prompt, continue_prompt)
@@ -186,12 +199,25 @@ class Script(scripts.Script):
 
             p.init_images = [target_canvas]
             p.image_mask = mask
-            processed = process_images(p)
+            had_save_init_img = hasattr(opts, "save_init_img")
+            original_save_init_img = getattr(opts, "save_init_img", False)
+            try:
+                opts.save_init_img = False
+                processed = process_images(p)
+            finally:
+                if had_save_init_img:
+                    opts.save_init_img = original_save_init_img
+                elif hasattr(opts, "save_init_img"):
+                    delattr(opts, "save_init_img")
 
             if not processed.images:
                 return Processed(p, [], p.seed, "Vertical Outpainting Mk5 generation returned no images.", all_seeds=[], infotexts=[])
 
-            final_image = restore_prepared_source(processed.images[0], prepared_source, source_top)
+            generated_image = processed.images[0]
+            if generated_image.size != target_canvas.size:
+                generated_image = generated_image.resize(target_canvas.size, Image.Resampling.LANCZOS)
+            final_image = restore_prepared_source(generated_image, prepared_source, source_top)
+            p.width, p.height = final_image.size
             if should_save_final_samples(opts, state, original_do_not_save_samples):
                 images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=processed.info, p=p)
 
@@ -206,7 +232,12 @@ class Script(scripts.Script):
             p.batch_size = original_batch_size
             p.do_not_save_grid = original_do_not_save_grid
             p.do_not_save_samples = original_do_not_save_samples
-            p.mask_blur = original_mask_blur
+            if has_mask_blur_x:
+                p.mask_blur_x = original_mask_blur_x
+            if has_mask_blur_y:
+                p.mask_blur_y = original_mask_blur_y
+            if not has_mask_blur_x and not has_mask_blur_y:
+                p.mask_blur = original_mask_blur
             p.inpainting_fill = original_inpainting_fill
             if has_inpainting_mask_invert:
                 p.inpainting_mask_invert = original_inpainting_mask_invert

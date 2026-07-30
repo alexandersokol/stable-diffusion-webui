@@ -11,11 +11,25 @@ def load_mk5_module_for_test():
     import modules as modules_package
 
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "vertical_outpainting_mk5.py"
+
+    def fake_create_infotext(p, all_prompts, all_seeds, all_subseeds, comments=None, all_negative_prompts=None):
+        extra_params = ", ".join(f"{key}: {value}" for key, value in p.extra_generation_params.items())
+        return (
+            f"{all_prompts[0]}\n"
+            f"Negative prompt: {all_negative_prompts[0]}\n"
+            f"Seed: {all_seeds[0]}, Variation seed: {all_subseeds[0]}, "
+            f"Size: {p.width}x{p.height}, {extra_params}"
+        )
+
     stubs = {
         "gradio": types.ModuleType("gradio"),
         "modules.scripts": types.SimpleNamespace(Script=object),
         "modules.images": types.ModuleType("modules.images"),
-        "modules.processing": types.SimpleNamespace(Processed=object, process_images=lambda *args, **kwargs: None),
+        "modules.processing": types.SimpleNamespace(
+            Processed=object,
+            create_infotext=fake_create_infotext,
+            process_images=lambda *args, **kwargs: None,
+        ),
         "modules.shared": types.SimpleNamespace(opts=types.SimpleNamespace(), state=types.SimpleNamespace()),
     }
 
@@ -160,6 +174,8 @@ class FakeProcessed:
         self.images = images
         self.seed = seed
         self.info = info
+        self.width = _p.width
+        self.height = _p.height
         self.all_seeds = kwargs.get("all_seeds")
         self.infotexts = kwargs.get("infotexts")
 
@@ -167,6 +183,7 @@ class FakeProcessed:
 def make_p(source):
     return types.SimpleNamespace(
         prompt="base prompt",
+        negative_prompt="bad prompt",
         init_images=[source],
         image_mask=None,
         width=64,
@@ -182,6 +199,7 @@ def make_p(source):
         extra_generation_params={},
         outpath_samples="samples",
         seed=42,
+        subseed=84,
     )
 
 
@@ -215,6 +233,27 @@ def test_run_generates_one_final_image_restores_source_and_saves():
     assert calls == [((4, 8), (4, 8), 4, 8, 0, True)]
     assert saved == [((4, 8), 101, "info-101", True)]
     assert result.images[0].getpixel((0, 2)) == (255, 0, 0)
+
+
+def test_run_normalizes_mutated_generation_size_and_restores_prepared_source():
+    mk5 = load_mk5_module_for_test()
+
+    def fake_process(p):
+        p.width = 6
+        p.height = 10
+        return FakeProcessed(p, [Image.new("RGB", (6, 10), "blue")], 101, "info-101")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    source = Image.new("RGB", (4, 4), "red")
+
+    result = mk5.Script().run(make_p(source), 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert result.images[0].size == (4, 8)
+    assert (result.width, result.height) == (4, 8)
+    assert result.images[0].crop((0, 2, 4, 6)).tobytes() == source.tobytes()
 
 
 def test_run_no_gap_returns_source_only_without_processing():
@@ -306,6 +345,46 @@ def test_run_restores_prompt_and_processing_state():
     assert p.inpaint_full_res is True
 
 
+class FakeAsymmetricBlurProcessing:
+    def __init__(self, source):
+        values = vars(make_p(source)).copy()
+        values.pop("mask_blur")
+        self.__dict__.update(values)
+        self.mask_blur_x = 3
+        self.mask_blur_y = 7
+
+    @property
+    def mask_blur(self):
+        if self.mask_blur_x == self.mask_blur_y:
+            return self.mask_blur_x
+        return None
+
+    @mask_blur.setter
+    def mask_blur(self, value):
+        if isinstance(value, int):
+            self.mask_blur_x = value
+            self.mask_blur_y = value
+
+
+def test_run_restores_asymmetric_mask_blur_axes():
+    mk5 = load_mk5_module_for_test()
+
+    def fake_process(p):
+        assert (p.mask_blur_x, p.mask_blur_y) == (4, 4)
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = FakeAsymmetricBlurProcessing(Image.new("RGB", (4, 4), "red"))
+
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert (p.mask_blur_x, p.mask_blur_y) == (3, 7)
+    assert p.mask_blur is None
+
+
 def test_run_honors_save_suppression_and_records_metadata():
     mk5 = load_mk5_module_for_test()
     saved = []
@@ -326,6 +405,33 @@ def test_run_honors_save_suppression_and_records_metadata():
     assert p.extra_generation_params["Vertical Outpainting MK5 seam size"] == 8
     assert p.extra_generation_params["Vertical Outpainting MK5 mask blur"] == 4
     assert p.extra_generation_params["Vertical Outpainting MK5 continue prompt injected"] is True
+
+
+def test_run_suppresses_internal_init_save_and_restores_option():
+    mk5 = load_mk5_module_for_test()
+    saved = []
+
+    def fake_process(p):
+        assert mk5.opts.save_init_img is False
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(
+        samples_save=True,
+        save_incomplete_images=False,
+        samples_format="png",
+        save_init_img=True,
+    )
+    mk5.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+    p.do_not_save_samples = True
+
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert mk5.opts.save_init_img is True
+    assert saved == []
 
 
 def test_run_returns_clear_errors_for_missing_source_and_small_target():
@@ -363,10 +469,17 @@ def test_run_no_gap_saves_source_only_result_when_allowed():
     mk5.Processed = FakeProcessed
     mk5.process_images = lambda _p: pytest.fail("process_images should not run for a blank mask")
     mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
-    mk5.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append((image.size, seed, info))
+    mk5.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append(
+        (image.size, seed, info, p.width, p.height)
+    )
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
 
     result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 4, 1.0, "Center", 1, 4, 0, False, "")
 
     assert len(result.images) == 1
-    assert saved == [((4, 4), 42, "")]
+    assert (result.width, result.height) == (4, 4)
+    assert result.info
+    assert result.infotexts == [result.info]
+    assert "Size: 4x4" in result.info
+    assert "Vertical Outpainting MK5 target height: 4" in result.info
+    assert saved == [((4, 4), 42, result.info, 4, 4)]
