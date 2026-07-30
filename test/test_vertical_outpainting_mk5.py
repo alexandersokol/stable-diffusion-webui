@@ -153,3 +153,165 @@ def test_should_save_final_samples_matches_processing_policy(samples_save, origi
     state = types.SimpleNamespace(interrupted=interrupted, skipped=skipped)
 
     assert mk5.should_save_final_samples(opts, state, original_do_not_save_samples) is expected
+
+
+class FakeProcessed:
+    def __init__(self, _p, images, seed, info, **kwargs):
+        self.images = images
+        self.seed = seed
+        self.info = info
+        self.all_seeds = kwargs.get("all_seeds")
+        self.infotexts = kwargs.get("infotexts")
+
+
+def make_p(source):
+    return types.SimpleNamespace(
+        prompt="base prompt",
+        init_images=[source],
+        image_mask=None,
+        width=64,
+        height=64,
+        n_iter=2,
+        batch_size=3,
+        do_not_save_grid=False,
+        do_not_save_samples=False,
+        mask_blur=9,
+        inpainting_fill=2,
+        inpainting_mask_invert=1,
+        inpaint_full_res=True,
+        extra_generation_params={},
+        outpath_samples="samples",
+        seed=42,
+    )
+
+
+def test_run_generates_one_final_image_restores_source_and_saves():
+    mk5 = load_mk5_module_for_test()
+    calls = []
+    saved = []
+
+    def fake_process(p):
+        calls.append((p.init_images[0].size, p.image_mask.size, p.width, p.height, p.inpainting_mask_invert, p.do_not_save_grid))
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
+    mk5.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append((image.size, seed, info, p.do_not_save_grid))
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+
+    result = mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert len(result.images) == 1
+    assert result.seed == 101
+    assert result.all_seeds == [101]
+    assert result.infotexts == ["info-101"]
+    assert calls == [((4, 8), (4, 8), 4, 8, 0, True)]
+    assert saved == [((4, 8), 101, "info-101", True)]
+    assert result.images[0].getpixel((0, 2)) == (255, 0, 0)
+
+
+def test_run_no_gap_returns_source_only_without_processing():
+    mk5 = load_mk5_module_for_test()
+    calls = []
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda _p: calls.append("called")
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    source = Image.new("RGB", (4, 4), "red")
+
+    result = mk5.Script().run(make_p(source), 4, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert calls == []
+    assert len(result.images) == 1
+    assert result.images[0].size == (4, 4)
+    assert result.images[0].tobytes() == source.tobytes()
+
+
+def test_run_empty_generation_returns_no_placeholder_and_saves_nothing():
+    mk5 = load_mk5_module_for_test()
+    saved = []
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda p: FakeProcessed(p, [], 101, "info-101")
+    mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
+    mk5.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+
+    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert result.images == []
+    assert result.all_seeds == []
+    assert result.infotexts == []
+    assert saved == []
+
+
+def test_run_restores_prompt_and_processing_state():
+    mk5 = load_mk5_module_for_test()
+    prompts_seen = []
+
+    def fake_process(p):
+        prompts_seen.append(p.prompt)
+        p.inpaint_full_res = False
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+    original_init_images = p.init_images
+
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, True, "continue naturally")
+
+    assert prompts_seen == ["base prompt, continue naturally"]
+    assert p.prompt == "base prompt"
+    assert p.init_images is original_init_images
+    assert p.image_mask is None
+    assert p.width == 64
+    assert p.height == 64
+    assert p.n_iter == 2
+    assert p.batch_size == 3
+    assert p.do_not_save_grid is False
+    assert p.do_not_save_samples is False
+    assert p.mask_blur == 9
+    assert p.inpainting_fill == 2
+    assert p.inpainting_mask_invert == 1
+    assert p.inpaint_full_res is True
+
+
+def test_run_honors_save_suppression_and_records_metadata():
+    mk5 = load_mk5_module_for_test()
+    saved = []
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+    mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
+    mk5.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=True, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+    p.do_not_save_samples = True
+
+    mk5.Script().run(p, 8, 0.25, "Bottom", 8, 4, 0, True, "continue naturally")
+
+    assert saved == []
+    assert p.extra_generation_params["Vertical Outpainting MK5 target height"] == 8
+    assert p.extra_generation_params["Vertical Outpainting MK5 scale"] == 0.25
+    assert p.extra_generation_params["Vertical Outpainting MK5 placement"] == "Bottom"
+    assert p.extra_generation_params["Vertical Outpainting MK5 seam size"] == 8
+    assert p.extra_generation_params["Vertical Outpainting MK5 mask blur"] == 4
+    assert p.extra_generation_params["Vertical Outpainting MK5 continue prompt injected"] is True
+
+
+def test_run_returns_clear_errors_for_missing_source_and_small_target():
+    mk5 = load_mk5_module_for_test()
+    mk5.Processed = FakeProcessed
+
+    missing = make_p(Image.new("RGB", (2, 4), "red"))
+    missing.init_images = []
+    missing_result = mk5.Script().run(missing, 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    small = make_p(Image.new("RGB", (2, 4), "red"))
+    small_result = mk5.Script().run(small, 2, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert missing_result.info == "Vertical Outpainting Mk5 requires one source image."
+    assert small_result.info == "Target height must be greater than or equal to the source image height."
