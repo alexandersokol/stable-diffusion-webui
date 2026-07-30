@@ -70,6 +70,97 @@ def zoom_content_centered(image, zoom):
     return resized.crop((left, top, left + width, top + height))
 
 
+def _round_up_to_64(value):
+    return math.ceil(value / 64) * 64
+
+
+def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur):
+    initial_seed = None
+    initial_info = None
+    up = int(expand_pixels) if pass_direction == "up" else 0
+    down = int(expand_pixels) if pass_direction == "down" else 0
+
+    target_w = _round_up_to_64(init_img.width)
+    target_h = _round_up_to_64(init_img.height + up + down)
+
+    if up > 0:
+        up = up * (target_h - init_img.height) // (up + down)
+    if down > 0:
+        down = target_h - init_img.height - up
+
+    img = Image.new("RGB", (target_w, target_h))
+    img.paste(init_img, ((target_w - init_img.width) // 2, up))
+
+    mask = Image.new("L", (img.width, img.height), "white")
+    draw = ImageDraw.Draw(mask)
+    draw.rectangle((
+        0,
+        up + (mask_blur * 2 if up > 0 else 0),
+        mask.width,
+        mask.height - down - (mask_blur * 2 if down > 0 else 0),
+    ), fill="black")
+
+    latent_mask = Image.new("L", (img.width, img.height), "white")
+    latent_draw = ImageDraw.Draw(latent_mask)
+    latent_draw.rectangle((
+        0,
+        up + (mask_blur // 2 if up > 0 else 0),
+        latent_mask.width,
+        latent_mask.height - down - (mask_blur // 2 if down > 0 else 0),
+    ), fill="black")
+
+    devices.torch_gc()
+
+    grid = images.split_grid(img, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
+    grid_mask = images.split_grid(mask, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
+    grid_latent_mask = images.split_grid(latent_mask, tile_w=p.width, tile_h=p.height, overlap=expand_pixels)
+
+    work = []
+    work_mask = []
+    work_latent_mask = []
+    work_results = []
+
+    for (y, h, row), (_, _, row_mask), (_, _, row_latent_mask) in zip(grid.tiles, grid_mask.tiles, grid_latent_mask.tiles):
+        for tiledata, tiledata_mask, tiledata_latent_mask in zip(row, row_mask, row_latent_mask):
+            tile_inside_original_vertical = y >= up and y + h <= img.height - down
+            if tile_inside_original_vertical:
+                continue
+
+            work.append(tiledata[2])
+            work_mask.append(tiledata_mask[2])
+            work_latent_mask.append(tiledata_latent_mask[2])
+
+    print(f"Vertical Outpainting Mk3 will process {len(work)} tiles for {pass_direction} expansion.")
+
+    for i in range(len(work)):
+        p.init_images = [work[i]]
+        p.image_mask = work_mask[i]
+        p.latent_mask = work_latent_mask[i]
+        state.job = f"Outpainting {pass_direction} tile {i + 1} out of {len(work)}"
+
+        processed = process_images(p)
+
+        if initial_seed is None:
+            initial_seed = processed.seed
+            initial_info = processed.info
+
+        p.seed = processed.seed + 1
+        work_results += processed.images
+
+    image_index = 0
+    for y, h, row in grid.tiles:
+        for tiledata in row:
+            tile_inside_original_vertical = y >= up and y + h <= img.height - down
+            if tile_inside_original_vertical:
+                continue
+
+            tiledata[2] = work_results[image_index] if image_index < len(work_results) else Image.new("RGB", (p.width, p.height))
+            image_index += 1
+
+    combined_image = images.combine_grid(grid)
+    return combined_image.crop((0, 0, target_w, init_img.height + up + down)), initial_seed, initial_info
+
+
 class Script(scripts.Script):
     def title(self):
         return "Vertical Outpainting Mk3"
