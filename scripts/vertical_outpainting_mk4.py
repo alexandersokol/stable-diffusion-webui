@@ -127,3 +127,103 @@ class Script(scripts.Script):
 
     def show(self, is_img2img):
         return is_img2img
+
+    def ui(self, is_img2img):
+        if not is_img2img:
+            return None
+
+        target_height = gr.Slider(label="Target height", minimum=64, maximum=4096, step=64, value=2048, elem_id=self.elem_id("target_height"))
+        source_placement = gr.Dropdown(label="Source placement", choices=PLACEMENT_CHOICES, value="All", elem_id=self.elem_id("source_placement"))
+        source_handling = gr.Dropdown(label="Source handling", choices=SOURCE_HANDLING_CHOICES, value="Preserve source pixels", elem_id=self.elem_id("source_handling"))
+        seam_size = gr.Slider(label="Seam size", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("seam_size"))
+        mask_blur = gr.Slider(label="Mask blur", minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
+        inpainting_fill = gr.Radio(label="Masked content", choices=MASKED_CONTENT_CHOICES, value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
+        inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
+        continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
+
+        return [target_height, source_placement, source_handling, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt]
+
+    def run(self, p, target_height, source_placement, source_handling, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt):
+        if not getattr(p, "init_images", None):
+            return Processed(p, [], p.seed, "Vertical Outpainting Mk4 requires one source image.")
+
+        source = p.init_images[0].convert("RGB")
+        target_height = int(target_height)
+        try:
+            placements = build_placement_offsets(source.height, target_height, source_placement)
+        except ValueError as exc:
+            return Processed(p, [], p.seed, str(exc))
+
+        if not placements:
+            return Processed(p, [], p.seed, "No valid source placement selected.")
+
+        original_prompt = p.prompt
+        original_init_images = p.init_images
+        original_image_mask = getattr(p, "image_mask", None)
+        original_width = p.width
+        original_height = p.height
+        original_n_iter = p.n_iter
+        original_batch_size = p.batch_size
+        original_do_not_save_grid = p.do_not_save_grid
+        original_do_not_save_samples = p.do_not_save_samples
+        original_mask_blur = p.mask_blur
+        original_inpainting_fill = p.inpainting_fill
+
+        p.extra_generation_params["Vertical Outpainting MK4 target height"] = target_height
+        p.extra_generation_params["Vertical Outpainting MK4 source placement"] = source_placement
+        p.extra_generation_params["Vertical Outpainting MK4 source handling"] = source_handling
+        p.extra_generation_params["Vertical Outpainting MK4 seam size"] = int(seam_size)
+        p.extra_generation_params["Vertical Outpainting MK4 mask blur"] = int(mask_blur)
+        p.extra_generation_params["Vertical Outpainting MK4 continue prompt injected"] = bool(inject_continue_prompt)
+
+        final_images = []
+        variant_seeds = []
+        variant_infos = []
+
+        try:
+            if inject_continue_prompt:
+                p.prompt = _append_continue_prompt(p.prompt, continue_prompt)
+
+            p.n_iter = 1
+            p.batch_size = 1
+            p.do_not_save_grid = True
+            p.do_not_save_samples = True
+            p.width = source.width
+            p.height = target_height
+            p.mask_blur = int(mask_blur)
+            p.inpainting_fill = SOFT_RESYNTHESIS_INPAINTING_FILL if source_handling == "Soft resynthesis" else inpainting_fill
+            state.job_count = len(placements)
+
+            for index, (placement_name, source_top) in enumerate(placements):
+                state.job = f"{placement_name}: final canvas {index + 1} out of {len(placements)}"
+                target_canvas = create_target_canvas(source, target_height, source_top)
+                mask = build_source_mask(source.size, target_height, source_top, source_handling, seam_size)
+
+                p.init_images = [target_canvas]
+                p.image_mask = mask
+                processed = process_images(p)
+
+                generated = processed.images[0] if processed.images else target_canvas
+                final_image = restore_source_region(generated, source, source_top, source_handling, seam_size)
+                final_images.append(final_image)
+                variant_seeds.append(processed.seed)
+                variant_infos.append(processed.info)
+                p.seed = processed.seed + 1
+
+            if opts.samples_save:
+                for image, seed, info in zip(final_images, variant_seeds, variant_infos):
+                    images.save_image(image, p.outpath_samples, "", seed, original_prompt, opts.samples_format, info=info, p=p)
+
+            return Processed(p, final_images, variant_seeds[0], variant_infos[0], all_seeds=variant_seeds, infotexts=variant_infos)
+        finally:
+            p.prompt = original_prompt
+            p.init_images = original_init_images
+            p.image_mask = original_image_mask
+            p.width = original_width
+            p.height = original_height
+            p.n_iter = original_n_iter
+            p.batch_size = original_batch_size
+            p.do_not_save_grid = original_do_not_save_grid
+            p.do_not_save_samples = original_do_not_save_samples
+            p.mask_blur = original_mask_blur
+            p.inpainting_fill = original_inpainting_fill
