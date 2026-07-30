@@ -70,6 +70,15 @@ def zoom_content_centered(image, zoom):
     return resized.crop((left, top, left + width, top + height))
 
 
+def _append_continue_prompt(prompt, continue_prompt):
+    continue_prompt = (continue_prompt or "").strip()
+    if not continue_prompt:
+        return prompt
+    if not prompt:
+        return continue_prompt
+    return f"{prompt}, {continue_prompt}"
+
+
 def _round_up_to_64(value):
     return math.ceil(value / 64) * 64
 
@@ -182,3 +191,64 @@ class Script(scripts.Script):
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
 
         return [pixels, mask_blur, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt]
+
+    def run(self, p, pixels, mask_blur, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt):
+        original_prompt = p.prompt
+        original_init_images = p.init_images
+        original_n_iter = p.n_iter
+        original_batch_size = p.batch_size
+        original_do_not_save_grid = p.do_not_save_grid
+        original_do_not_save_samples = p.do_not_save_samples
+
+        sequences = build_shift_sequences(direction, shift_preset, int(pixels))
+        if not sequences:
+            return Processed(p, [], p.seed, "No vertical outpainting direction selected.")
+
+        p.extra_generation_params["Vertical Outpainting MK3 pixels"] = int(pixels)
+        p.extra_generation_params["Vertical Outpainting MK3 directions"] = ", ".join(direction or [])
+        p.extra_generation_params["Vertical Outpainting MK3 shift preset"] = shift_preset
+        p.extra_generation_params["Vertical Outpainting MK3 zoom"] = float(zoom)
+        p.extra_generation_params["Vertical Outpainting MK3 inject continue prompt"] = bool(inject_continue_prompt)
+
+        try:
+            if inject_continue_prompt:
+                p.prompt = _append_continue_prompt(p.prompt, continue_prompt)
+
+            p.mask_blur = mask_blur * 2
+            p.inpainting_fill = inpainting_fill
+            p.inpaint_full_res = False
+            p.n_iter = 1
+            p.batch_size = 1
+            p.do_not_save_grid = True
+            p.do_not_save_samples = True
+
+            prepared_image = zoom_content_centered(original_init_images[0], zoom)
+            state.job_count = sum(len(passes) for _, passes in sequences)
+
+            final_images = []
+            initial_seed = None
+            initial_info = None
+
+            for preset_name, passes in sequences:
+                current_image = prepared_image.copy()
+                for pass_index, (pass_direction, pass_pixels) in enumerate(passes):
+                    state.job = f"{preset_name}: pass {pass_index + 1} out of {len(passes)}"
+                    current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur)
+                    if initial_seed is None and pass_seed is not None:
+                        initial_seed = pass_seed
+                        initial_info = pass_info
+
+                final_images.append(current_image)
+
+            if opts.samples_save:
+                for image in final_images:
+                    images.save_image(image, p.outpath_samples, "", initial_seed, original_prompt, opts.samples_format, info=initial_info, p=p)
+
+            return Processed(p, final_images, initial_seed, initial_info)
+        finally:
+            p.prompt = original_prompt
+            p.init_images = original_init_images
+            p.n_iter = original_n_iter
+            p.batch_size = original_batch_size
+            p.do_not_save_grid = original_do_not_save_grid
+            p.do_not_save_samples = original_do_not_save_samples
