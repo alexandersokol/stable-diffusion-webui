@@ -168,6 +168,10 @@ class Script(scripts.Script):
         original_do_not_save_samples = p.do_not_save_samples
         original_mask_blur = p.mask_blur
         original_inpainting_fill = p.inpainting_fill
+        has_inpainting_mask_invert = hasattr(p, "inpainting_mask_invert")
+        original_inpainting_mask_invert = getattr(p, "inpainting_mask_invert", None)
+        has_inpaint_full_res = hasattr(p, "inpaint_full_res")
+        original_inpaint_full_res = getattr(p, "inpaint_full_res", None)
 
         p.extra_generation_params["Vertical Outpainting MK4 target height"] = target_height
         p.extra_generation_params["Vertical Outpainting MK4 source placement"] = source_placement
@@ -192,6 +196,7 @@ class Script(scripts.Script):
             p.height = target_height
             p.mask_blur = int(mask_blur)
             p.inpainting_fill = SOFT_RESYNTHESIS_INPAINTING_FILL if source_handling == "Soft resynthesis" else inpainting_fill
+            p.inpainting_mask_invert = 0
             state.job_count = len(placements)
 
             for index, (placement_name, source_top) in enumerate(placements):
@@ -203,18 +208,36 @@ class Script(scripts.Script):
                 p.image_mask = mask
                 processed = process_images(p)
 
-                generated = processed.images[0] if processed.images else target_canvas
+                if not processed.images:
+                    break
+
+                generated = processed.images[0]
                 final_image = restore_source_region(generated, source, source_top, source_handling, seam_size)
                 final_images.append(final_image)
                 variant_seeds.append(processed.seed)
                 variant_infos.append(processed.info)
                 p.seed = processed.seed + 1
 
-            if opts.samples_save:
+            should_save_samples = (
+                opts.samples_save
+                and not original_do_not_save_samples
+                and (
+                    getattr(opts, "save_incomplete_images", False)
+                    or not getattr(state, "interrupted", False) and not getattr(state, "skipped", False)
+                )
+            )
+            if should_save_samples:
                 for image, seed, info in zip(final_images, variant_seeds, variant_infos):
                     images.save_image(image, p.outpath_samples, "", seed, original_prompt, opts.samples_format, info=info, p=p)
 
-            return Processed(p, final_images, variant_seeds[0], variant_infos[0], all_seeds=variant_seeds, infotexts=variant_infos)
+            return Processed(
+                p,
+                final_images,
+                variant_seeds[0] if variant_seeds else p.seed,
+                variant_infos[0] if variant_infos else "",
+                all_seeds=variant_seeds,
+                infotexts=variant_infos,
+            )
         finally:
             p.prompt = original_prompt
             p.init_images = original_init_images
@@ -227,3 +250,9 @@ class Script(scripts.Script):
             p.do_not_save_samples = original_do_not_save_samples
             p.mask_blur = original_mask_blur
             p.inpainting_fill = original_inpainting_fill
+            if has_inpainting_mask_invert:
+                p.inpainting_mask_invert = original_inpainting_mask_invert
+            else:
+                delattr(p, "inpainting_mask_invert")
+            if has_inpaint_full_res:
+                p.inpaint_full_res = original_inpaint_full_res

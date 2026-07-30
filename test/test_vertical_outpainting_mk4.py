@@ -340,3 +340,105 @@ def test_seam_size_is_clamped_to_source_height():
 
     assert mask_values_by_row(mask) == [255] * 8
     assert restored.tobytes() == Image.new("RGB", (2, 8), "blue").tobytes()
+
+
+def test_run_forces_normal_mask_polarity_and_restores_inpaint_settings():
+    mk4 = load_mk4_module_for_test()
+    settings_seen = []
+
+    def fake_process(p):
+        settings_seen.append((p.inpainting_mask_invert, p.inpaint_full_res))
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+    p.inpainting_mask_invert = 1
+    p.inpaint_full_res = True
+
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert settings_seen == [(0, True)]
+    assert p.inpainting_mask_invert == 1
+    assert p.inpaint_full_res is True
+
+
+def test_run_stops_on_empty_processed_images_without_placeholder_or_save():
+    mk4 = load_mk4_module_for_test()
+    saved = []
+    calls = []
+
+    def fake_process(p):
+        calls.append(p.seed)
+        if len(calls) == 1:
+            return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+        return FakeProcessed(p, [], 102, "info-102")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=True, samples_format="png", save_incomplete_images=False)
+    mk4.images.save_image = lambda _image, _path, _basename, seed, _prompt, _format, **kwargs: saved.append((seed, kwargs["info"]))
+    mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+
+    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert calls == [42, 102]
+    assert len(result.images) == 1
+    assert result.all_seeds == [101]
+    assert result.infotexts == ["info-101"]
+    assert saved == [(101, "info-101")]
+
+
+def test_run_returns_empty_result_without_saving_when_first_generation_is_empty():
+    mk4 = load_mk4_module_for_test()
+    saved = []
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = lambda p: FakeProcessed(p, [], 101, "info-101")
+    mk4.opts = types.SimpleNamespace(samples_save=True, samples_format="png", save_incomplete_images=False)
+    mk4.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+
+    result = mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert result.images == []
+    assert result.all_seeds == []
+    assert result.infotexts == []
+    assert saved == []
+
+
+def test_run_does_not_save_when_original_request_disables_sample_saving():
+    mk4 = load_mk4_module_for_test()
+    saved = []
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+    mk4.opts = types.SimpleNamespace(samples_save=True, samples_format="png", save_incomplete_images=False)
+    mk4.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+    p.do_not_save_samples = True
+
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert saved == []
+
+
+def test_run_does_not_save_interrupted_results_unless_incomplete_saves_are_enabled():
+    mk4 = load_mk4_module_for_test()
+    saved = []
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+    mk4.opts = types.SimpleNamespace(samples_save=True, samples_format="png", save_incomplete_images=False)
+    mk4.images.save_image = lambda *args, **kwargs: saved.append(args)
+    mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=True, skipped=False)
+    p = make_p(Image.new("RGB", (2, 4), "red"))
+
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+
+    assert saved == []
