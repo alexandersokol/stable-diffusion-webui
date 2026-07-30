@@ -37,6 +37,7 @@ notification.mp3
 /config_states/
 /node_modules
 /package-lock.json
+/.worktrees/
 /.coverage*
 /test/test_outputs
 /cache
