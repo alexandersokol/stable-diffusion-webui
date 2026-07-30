@@ -341,3 +341,32 @@ def test_run_returns_clear_errors_for_missing_source_and_small_target():
 
     assert missing_result.info == "Vertical Outpainting Mk5 requires one source image."
     assert small_result.info == "Target height must be greater than or equal to the source image height."
+
+
+def test_run_removes_temporary_mask_invert_when_original_object_lacked_it():
+    mk5 = load_mk5_module_for_test()
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+    delattr(p, "inpainting_mask_invert")
+
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+
+    assert not hasattr(p, "inpainting_mask_invert")
+
+
+def test_run_no_gap_saves_source_only_result_when_allowed():
+    mk5 = load_mk5_module_for_test()
+    saved = []
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda _p: pytest.fail("process_images should not run for a blank mask")
+    mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
+    mk5.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append((image.size, seed, info))
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+
+    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 4, 1.0, "Center", 1, 4, 0, False, "")
+
+    assert len(result.images) == 1
+    assert saved == [((4, 4), 42, "")]
