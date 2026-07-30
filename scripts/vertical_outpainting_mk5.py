@@ -103,6 +103,17 @@ def should_save_final_samples(opts_obj, state_obj, original_do_not_save_samples)
     )
 
 
+def _create_final_infotext(p, prompt, seed):
+    return create_infotext(
+        p,
+        [prompt],
+        [seed],
+        [getattr(p, "subseed", -1)],
+        comments=[],
+        all_negative_prompts=[getattr(p, "negative_prompt", "")],
+    )
+
+
 class Script(scripts.Script):
     def title(self):
         return "Vertical Outpainting Mk5"
@@ -170,14 +181,7 @@ class Script(scripts.Script):
             if float(scale) == 1.0 or not mask_has_white(mask):
                 final_image = target_canvas
                 p.width, p.height = final_image.size
-                infotext = create_infotext(
-                    p,
-                    [original_prompt],
-                    [p.seed],
-                    [p.subseed],
-                    comments=[],
-                    all_negative_prompts=[p.negative_prompt],
-                )
+                infotext = _create_final_infotext(p, original_prompt, p.seed)
                 if should_save_final_samples(opts, state, original_do_not_save_samples):
                     images.save_image(final_image, p.outpath_samples, "", p.seed, original_prompt, opts.samples_format, info=infotext, p=p)
                 return Processed(p, [final_image], p.seed, infotext, all_seeds=[p.seed], infotexts=[infotext])
@@ -218,10 +222,11 @@ class Script(scripts.Script):
                 generated_image = generated_image.resize(target_canvas.size, Image.Resampling.LANCZOS)
             final_image = restore_prepared_source(generated_image, prepared_source, source_top)
             p.width, p.height = final_image.size
+            infotext = _create_final_infotext(p, original_prompt, processed.seed)
             if should_save_final_samples(opts, state, original_do_not_save_samples):
-                images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=processed.info, p=p)
+                images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=infotext, p=p)
 
-            return Processed(p, [final_image], processed.seed, processed.info, all_seeds=[processed.seed], infotexts=[processed.info])
+            return Processed(p, [final_image], processed.seed, infotext, all_seeds=[processed.seed], infotexts=[infotext])
         finally:
             p.prompt = original_prompt
             p.init_images = original_init_images

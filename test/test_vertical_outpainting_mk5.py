@@ -229,9 +229,11 @@ def test_run_generates_one_final_image_restores_source_and_saves():
     assert len(result.images) == 1
     assert result.seed == 101
     assert result.all_seeds == [101]
-    assert result.infotexts == ["info-101"]
+    assert result.infotexts == [result.info]
+    assert "Size: 4x8" in result.info
+    assert "Vertical Outpainting MK5 target height: 8" in result.info
     assert calls == [((4, 8), (4, 8), 4, 8, 0, True)]
-    assert saved == [((4, 8), 101, "info-101", True)]
+    assert saved == [((4, 8), 101, result.info, True)]
     assert result.images[0].getpixel((0, 2)) == (255, 0, 0)
 
 
@@ -253,6 +255,10 @@ def test_run_normalizes_mutated_generation_size_and_restores_prepared_source():
 
     assert result.images[0].size == (4, 8)
     assert (result.width, result.height) == (4, 8)
+    assert result.info != "info-101"
+    assert result.infotexts == [result.info]
+    assert "Size: 4x8" in result.info
+    assert "Size: 6x10" not in result.info
     assert result.images[0].crop((0, 2, 4, 6)).tobytes() == source.tobytes()
 
 
