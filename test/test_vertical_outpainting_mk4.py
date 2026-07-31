@@ -183,6 +183,25 @@ def test_restore_source_region_blend_pastes_only_protected_inner_source():
     ]
 
 
+def test_restore_source_region_blend_soft_blend_preserves_generated_rows_outside_band():
+    mk4 = load_mk4_module_for_test()
+    source = Image.new("RGB", (1, 10), "red")
+    generated = Image.new("RGB", (1, 14), "blue")
+
+    restored = mk4.restore_source_region(generated, source, 2, "Blend seam only", 4, 2)
+
+    assert restored.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 4)) == (0, 0, 255)
+    assert restored.getpixel((0, 5)) == (0, 0, 255)
+    assert restored.getpixel((0, 6)) == (255, 0, 0)
+    assert restored.getpixel((0, 7)) == (255, 0, 0)
+    assert restored.getpixel((0, 8)) == (0, 0, 255)
+    assert restored.getpixel((0, 9)) == (0, 0, 255)
+    assert restored.getpixel((0, 10)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 11)) not in [(255, 0, 0), (0, 0, 255)]
+
+
 def test_restore_source_region_soft_resynthesis_returns_generated_copy():
     mk4 = load_mk4_module_for_test()
     source = Image.new("RGB", (2, 4), "red")

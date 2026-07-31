@@ -102,8 +102,19 @@ def soft_blend_vertical_seams(generated, source, source_top, blend_width):
         result.paste(source, (0, source_top))
         return result
 
-    source_bottom = source_top + source.height
     result.paste(source, (0, source_top))
+
+    return soft_blend_vertical_seam_bands(result, generated, source, source_top, blend_width)
+
+
+def soft_blend_vertical_seam_bands(result, generated, source, source_top, blend_width):
+    source = source.convert("RGB")
+    source_top = int(source_top)
+    blend_width = max(0, min(int(blend_width), source.height, result.height))
+    if blend_width <= 0:
+        return result
+
+    source_bottom = source_top + source.height
 
     if source_top > 0:
         width = min(blend_width, source.height, source_top, result.height - source_top)
@@ -154,7 +165,7 @@ def restore_source_region(generated, source, source_top, source_handling, seam_s
         result.paste(protected, (0, source_top + crop_top))
 
     if int(soft_seam_blend) > 0:
-        result = soft_blend_vertical_seams(result, source, source_top, soft_seam_blend)
+        result = soft_blend_vertical_seam_bands(result, generated, source, source_top, soft_seam_blend)
 
     return result
 
