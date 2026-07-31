@@ -137,6 +137,33 @@ def test_restore_source_region_preserve_pastes_entire_source():
     ]
 
 
+def test_restore_source_region_preserve_with_soft_blend_feathers_edges_only():
+    mk4 = load_mk4_module_for_test()
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
+
+    restored = mk4.restore_source_region(generated, source, 2, "Preserve source pixels", 1, 2)
+
+    assert restored.getpixel((0, 0)) == (0, 0, 255)
+    assert restored.getpixel((0, 9)) == (0, 0, 255)
+    assert restored.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 4)) == (255, 0, 0)
+    assert restored.getpixel((0, 5)) == (255, 0, 0)
+    assert restored.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
+
+
+def test_restore_source_region_soft_resynthesis_ignores_soft_blend():
+    mk4 = load_mk4_module_for_test()
+    source = Image.new("RGB", (1, 4), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    restored = mk4.restore_source_region(generated, source, 2, "Soft resynthesis", 1, 2)
+
+    assert restored.tobytes() == generated.tobytes()
+
+
 def test_restore_source_region_blend_pastes_only_protected_inner_source():
     mk4 = load_mk4_module_for_test()
     source = Image.new("RGB", (2, 4), "red")
@@ -213,7 +240,7 @@ def test_run_generates_all_final_placements_and_saves_without_grid():
     mk4.state = types.SimpleNamespace(job="", job_count=0)
     p = make_p(Image.new("RGB", (4, 4), "red"))
 
-    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, False, "")
+    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert len(result.images) == 5
     assert result.all_seeds == [101, 102, 103, 104, 105]
@@ -234,8 +261,8 @@ def test_run_preserves_source_pixels_or_leaves_soft_resynthesis_generated():
     mk4.state = types.SimpleNamespace(job="", job_count=0)
     source = Image.new("RGB", (2, 4), "red")
 
-    preserve = mk4.Script().run(make_p(source), 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
-    soft = mk4.Script().run(make_p(source), 8, "Centered", "Soft resynthesis", 1, 4, 0, False, "")
+    preserve = mk4.Script().run(make_p(source), 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
+    soft = mk4.Script().run(make_p(source), 8, "Centered", "Soft resynthesis", 1, 4, 0, 0, False, "")
 
     assert preserve.images[0].getpixel((0, 2)) == (255, 0, 0)
     assert preserve.images[0].getpixel((0, 3)) == (255, 0, 0)
@@ -255,7 +282,7 @@ def test_run_soft_resynthesis_forces_original_masked_content():
     mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
     mk4.state = types.SimpleNamespace(job="", job_count=0)
 
-    mk4.Script().run(make_p(Image.new("RGB", (2, 4), "red")), 8, "Centered", "Soft resynthesis", 1, 4, 3, False, "")
+    mk4.Script().run(make_p(Image.new("RGB", (2, 4), "red")), 8, "Centered", "Soft resynthesis", 1, 4, 0, 3, False, "")
 
     assert inpainting_fill_values == [mk4.SOFT_RESYNTHESIS_INPAINTING_FILL]
 
@@ -275,7 +302,7 @@ def test_run_injects_continue_prompt_and_restores_processing_state():
     p = make_p(Image.new("RGB", (2, 4), "red"))
     original_init_images = p.init_images
 
-    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, True, "continue naturally")
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, True, "continue naturally")
 
     assert prompts_seen == ["base prompt, continue naturally"]
     assert p.prompt == "base prompt"
@@ -297,10 +324,10 @@ def test_run_returns_clear_errors_for_missing_source_and_small_target():
 
     missing = make_p(Image.new("RGB", (2, 4), "red"))
     missing.init_images = []
-    missing_result = mk4.Script().run(missing, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    missing_result = mk4.Script().run(missing, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     small = make_p(Image.new("RGB", (2, 4), "red"))
-    small_result = mk4.Script().run(small, 2, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    small_result = mk4.Script().run(small, 2, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert missing_result.info == "Vertical Outpainting Mk4 requires one source image."
     assert small_result.info == "Target height must be greater than or equal to the source image height."
@@ -320,7 +347,7 @@ def test_run_records_mk4_generation_metadata_and_respects_explicit_placement():
     mk4.state = types.SimpleNamespace(job="", job_count=0)
     p = make_p(Image.new("RGB", (2, 4), "red"))
 
-    result = mk4.Script().run(p, 8, "Bottom", "Blend seam only", 1, 4, 0, True, "continue naturally")
+    result = mk4.Script().run(p, 8, "Bottom", "Blend seam only", 1, 4, 32, 0, True, "continue naturally")
 
     assert len(result.images) == 1
     assert mask_values_by_row(masks[0]) == [255, 255, 255, 255, 255, 0, 0, 0]
@@ -329,6 +356,7 @@ def test_run_records_mk4_generation_metadata_and_respects_explicit_placement():
     assert p.extra_generation_params["Vertical Outpainting MK4 source handling"] == "Blend seam only"
     assert p.extra_generation_params["Vertical Outpainting MK4 seam size"] == 1
     assert p.extra_generation_params["Vertical Outpainting MK4 mask blur"] == 4
+    assert p.extra_generation_params["Vertical Outpainting MK4 soft seam blend"] == 32
     assert p.extra_generation_params["Vertical Outpainting MK4 continue prompt injected"] is True
 
 
@@ -358,7 +386,7 @@ def test_run_forces_normal_mask_polarity_and_restores_inpaint_settings():
     p.inpainting_mask_invert = 1
     p.inpaint_full_res = True
 
-    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert settings_seen == [(0, True)]
     assert p.inpainting_mask_invert == 1
@@ -383,7 +411,7 @@ def test_run_stops_on_empty_processed_images_without_placeholder_or_save():
     mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     p = make_p(Image.new("RGB", (2, 4), "red"))
 
-    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, False, "")
+    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert calls == [42, 102]
     assert len(result.images) == 1
@@ -403,7 +431,7 @@ def test_run_returns_empty_result_without_saving_when_first_generation_is_empty(
     mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     p = make_p(Image.new("RGB", (2, 4), "red"))
 
-    result = mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    result = mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert result.images == []
     assert result.all_seeds == []
@@ -423,7 +451,7 @@ def test_run_does_not_save_when_original_request_disables_sample_saving():
     p = make_p(Image.new("RGB", (2, 4), "red"))
     p.do_not_save_samples = True
 
-    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert saved == []
 
@@ -439,6 +467,6 @@ def test_run_does_not_save_interrupted_results_unless_incomplete_saves_are_enabl
     mk4.state = types.SimpleNamespace(job="", job_count=0, interrupted=True, skipped=False)
     p = make_p(Image.new("RGB", (2, 4), "red"))
 
-    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, False, "")
+    mk4.Script().run(p, 8, "Centered", "Preserve source pixels", 1, 4, 0, 0, False, "")
 
     assert saved == []
