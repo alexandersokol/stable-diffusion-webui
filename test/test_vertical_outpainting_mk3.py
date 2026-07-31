@@ -165,7 +165,7 @@ def test_run_uses_each_preset_representative_metadata_for_saved_and_returned_ima
             self.all_seeds = kwargs.get("all_seeds")
             self.infotexts = kwargs.get("infotexts")
 
-    def expand_once(_p, image, _pixels, _direction, _mask_blur):
+    def expand_once(_p, image, _pixels, _direction, _mask_blur, _soft_seam_blend):
         seed, info = next(pass_results)
         return image, seed, info
 
@@ -189,13 +189,14 @@ def test_run_uses_each_preset_representative_metadata_for_saved_and_returned_ima
         seed=42,
     )
 
-    result = mk3.Script().run(p, 8, 4, 0, ["up", "down"], "All", 1.0, False, "")
+    result = mk3.Script().run(p, 8, 4, 32, 0, ["up", "down"], "All", 1.0, False, "")
 
     assert result.seed == 101
     assert result.info == "info-101"
     assert result.all_seeds == [101, 201, 301, 401, 501]
     assert result.infotexts == ["info-101", "info-201", "info-301", "info-401", "info-501"]
     assert [(seed, info) for _image, seed, info, _p in saved_images] == list(zip(result.all_seeds, result.infotexts))
+    assert p.extra_generation_params["Vertical Outpainting MK3 soft seam blend"] == 32
 
 
 def test_run_distinguishes_invalid_preset_from_missing_direction():
@@ -219,8 +220,77 @@ def test_run_distinguishes_invalid_preset_from_missing_direction():
         seed=42,
     )
 
-    no_direction = mk3.Script().run(p, 8, 4, 0, [], "All", 1.0, False, "")
-    invalid_preset = mk3.Script().run(p, 8, 4, 0, ["up"], "Centered", 1.0, False, "")
+    no_direction = mk3.Script().run(p, 8, 4, 32, 0, [], "All", 1.0, False, "")
+    invalid_preset = mk3.Script().run(p, 8, 4, 32, 0, ["up"], "Centered", 1.0, False, "")
 
     assert no_direction.info == "No vertical outpainting direction selected."
     assert invalid_preset.info == "Selected shift preset is not available for the chosen outpainting directions."
+
+
+def test_soft_blend_vertical_seams_mk3_zero_preserves_hard_paste():
+    mk3 = load_mk3_module_for_test()
+    source = Image.new("RGB", (1, 4), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    blended = mk3.soft_blend_vertical_seams(generated, source, 2, 0)
+
+    expected = generated.copy()
+    expected.paste(source, (0, 2))
+    assert blended.tobytes() == expected.tobytes()
+
+
+def test_soft_blend_vertical_seams_mk3_feathers_only_boundary_band():
+    mk3 = load_mk3_module_for_test()
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
+
+    blended = mk3.soft_blend_vertical_seams(generated, source, 2, 2)
+
+    assert blended.getpixel((0, 0)) == (0, 0, 255)
+    assert blended.getpixel((0, 9)) == (0, 0, 255)
+    assert blended.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 4)) == (255, 0, 0)
+    assert blended.getpixel((0, 5)) == (255, 0, 0)
+    assert blended.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
+
+
+def test_expand_vertical_once_soft_blends_current_image_after_generation():
+    mk3 = load_mk3_module_for_test()
+    calls = []
+
+    class FakeProcessed:
+        def __init__(self, _p, images, seed, info, **kwargs):
+            self.images = images
+            self.seed = seed
+            self.info = info
+
+    def fake_process(p):
+        calls.append(p.init_images[0].size)
+        return FakeProcessed(p, [Image.new("RGB", p.init_images[0].size, "blue")], 101, "info-101")
+
+    def split_grid(image, **_kwargs):
+        return types.SimpleNamespace(tiles=[(0, image.height, [[0, image.width, image]])])
+
+    mk3.process_images = fake_process
+    mk3.images.split_grid = split_grid
+    mk3.images.combine_grid = lambda grid: grid.tiles[0][2][0][2]
+    p = types.SimpleNamespace(
+        init_images=[],
+        image_mask=None,
+        latent_mask=None,
+        width=4,
+        height=4,
+        seed=42,
+    )
+
+    result, seed, info = mk3._expand_vertical_once(p, Image.new("RGB", (4, 4), "red"), 4, "up", 0, 2)
+
+    assert calls
+    assert seed == 101
+    assert info == "info-101"
+    assert result.size == (4, 8)
+    assert result.getpixel((0, 4)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.getpixel((0, 6)) == (255, 0, 0)

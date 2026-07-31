@@ -87,7 +87,51 @@ def _safe_overlap(expand_pixels, tile_w, tile_h):
     return max(0, min(int(expand_pixels), int(tile_w) - 1, int(tile_h) - 1))
 
 
-def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur):
+def soft_blend_vertical_seams(generated, source, source_top, blend_width):
+    result = generated.copy().convert("RGB")
+    source = source.convert("RGB")
+    source_top = int(source_top)
+    blend_width = max(0, min(int(blend_width), source.height, result.height))
+    if blend_width <= 0:
+        result.paste(source, (0, source_top))
+        return result
+
+    result.paste(source, (0, source_top))
+
+    return soft_blend_vertical_seam_bands(result, generated, source, source_top, blend_width)
+
+
+def soft_blend_vertical_seam_bands(result, generated, source, source_top, blend_width):
+    source = source.convert("RGB")
+    source_top = int(source_top)
+    blend_width = max(0, min(int(blend_width), source.height, result.height))
+    if blend_width <= 0:
+        return result
+
+    source_bottom = source_top + source.height
+
+    if source_top > 0:
+        width = min(blend_width, source.height, source_top, result.height - source_top)
+        for index in range(width):
+            alpha = (index + 1) / (width + 1)
+            generated_row = generated.crop((0, source_top + index, source.width, source_top + index + 1)).convert("RGB")
+            source_row = source.crop((0, index, source.width, index + 1))
+            result.paste(Image.blend(generated_row, source_row, alpha), (0, source_top + index))
+
+    if source_bottom < result.height:
+        width = min(blend_width, source.height, source_bottom, result.height - source_bottom)
+        for index in range(width):
+            alpha = 1.0 - ((index + 1) / (width + 1))
+            source_y = source.height - width + index
+            result_y = source_bottom - width + index
+            generated_row = generated.crop((0, result_y, source.width, result_y + 1)).convert("RGB")
+            source_row = source.crop((0, source_y, source.width, source_y + 1))
+            result.paste(Image.blend(generated_row, source_row, alpha), (0, result_y))
+
+    return result
+
+
+def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur, soft_seam_blend=0):
     initial_seed = None
     initial_info = None
     up = int(expand_pixels) if pass_direction == "up" else 0
@@ -175,7 +219,9 @@ def _expand_vertical_once(p, init_img, expand_pixels, pass_direction, mask_blur)
             image_index += 1
 
     combined_image = images.combine_grid(grid)
-    return combined_image.crop((0, 0, logical_w, logical_h)), initial_seed, initial_info
+    final = combined_image.crop((0, 0, logical_w, logical_h))
+    final = soft_blend_vertical_seams(final, init_img, up, soft_seam_blend)
+    return final, initial_seed, initial_info
 
 
 class Script(scripts.Script):
@@ -191,6 +237,7 @@ class Script(scripts.Script):
 
         pixels = gr.Slider(label="Pixels to expand", minimum=8, maximum=384, step=8, value=384, elem_id=self.elem_id("pixels"))
         mask_blur = gr.Slider(label="Mask blur", minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
+        soft_seam_blend = gr.Slider(label="Soft seam blend", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("soft_seam_blend"))
         inpainting_fill = gr.Radio(label="Masked content", choices=["fill", "original", "latent noise", "latent nothing"], value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
         direction = gr.CheckboxGroup(label="Outpainting direction", choices=["up", "down"], value=["up", "down"], elem_id=self.elem_id("direction"))
         shift_preset = gr.Dropdown(label="Shift preset", choices=SHIFT_PRESET_CHOICES, value="All", elem_id=self.elem_id("shift_preset"))
@@ -198,9 +245,9 @@ class Script(scripts.Script):
         inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
 
-        return [pixels, mask_blur, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt]
+        return [pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt]
 
-    def run(self, p, pixels, mask_blur, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt):
+    def run(self, p, pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt):
         original_prompt = p.prompt
         original_init_images = p.init_images
         original_n_iter = p.n_iter
@@ -217,6 +264,7 @@ class Script(scripts.Script):
             return Processed(p, [], p.seed, message)
 
         p.extra_generation_params["Vertical Outpainting MK3 pixels"] = int(pixels)
+        p.extra_generation_params["Vertical Outpainting MK3 soft seam blend"] = int(soft_seam_blend)
         p.extra_generation_params["Vertical Outpainting MK3 directions"] = ", ".join(direction or [])
         p.extra_generation_params["Vertical Outpainting MK3 shift preset"] = shift_preset
         p.extra_generation_params["Vertical Outpainting MK3 zoom"] = float(zoom)
@@ -247,7 +295,7 @@ class Script(scripts.Script):
                 preset_info = None
                 for pass_index, (pass_direction, pass_pixels) in enumerate(passes):
                     state.job = f"{preset_name}: pass {pass_index + 1} out of {len(passes)}"
-                    current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur)
+                    current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur, soft_seam_blend)
                     if preset_seed is None and pass_seed is not None:
                         preset_seed = pass_seed
                         preset_info = pass_info
