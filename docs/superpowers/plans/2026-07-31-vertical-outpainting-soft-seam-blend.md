@@ -71,17 +71,19 @@ def test_soft_blend_vertical_seams_zero_preserves_hard_paste_result():
 
 def test_soft_blend_vertical_seams_feathers_only_boundary_band():
     mk5 = load_mk5_module_for_test()
-    source = Image.new("RGB", (1, 4), "red")
-    generated = Image.new("RGB", (1, 8), "blue")
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
 
     blended = mk5.soft_blend_vertical_seams(generated, source, 2, 2)
 
     assert blended.getpixel((0, 0)) == (0, 0, 255)
-    assert blended.getpixel((0, 7)) == (0, 0, 255)
-    assert blended.getpixel((0, 3)) == (255, 0, 0)
-    assert blended.getpixel((0, 4)) == (255, 0, 0)
+    assert blended.getpixel((0, 9)) == (0, 0, 255)
     assert blended.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
-    assert blended.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 4)) == (255, 0, 0)
+    assert blended.getpixel((0, 5)) == (255, 0, 0)
+    assert blended.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 ```
 
 - [ ] **Step 2: Run tests and verify the helper is missing**
@@ -173,12 +175,13 @@ def test_run_records_soft_seam_blend_metadata_and_applies_blend():
     mk5.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
     mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
-    p = make_p(Image.new("RGB", (1, 4), "red"))
+    p = make_p(Image.new("RGB", (1, 6), "red"))
 
-    result = mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 2, 0, False, "")
+    result = mk5.Script().run(p, 10, 0.0, "Center", 1, 4, 2, 0, False, "")
 
     assert result.images[0].getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
-    assert result.images[0].getpixel((0, 3)) == (255, 0, 0)
+    assert result.images[0].getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.images[0].getpixel((0, 4)) == (255, 0, 0)
     assert p.extra_generation_params["Vertical Outpainting MK5 soft seam blend"] == 2
 ```
 
@@ -257,17 +260,19 @@ Append near the existing `restore_source_region` tests:
 ```python
 def test_restore_source_region_preserve_with_soft_blend_feathers_edges_only():
     mk4 = load_mk4_module_for_test()
-    source = Image.new("RGB", (1, 4), "red")
-    generated = Image.new("RGB", (1, 8), "blue")
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
 
     restored = mk4.restore_source_region(generated, source, 2, "Preserve source pixels", 1, 2)
 
     assert restored.getpixel((0, 0)) == (0, 0, 255)
-    assert restored.getpixel((0, 7)) == (0, 0, 255)
+    assert restored.getpixel((0, 9)) == (0, 0, 255)
     assert restored.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
-    assert restored.getpixel((0, 3)) == (255, 0, 0)
+    assert restored.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
     assert restored.getpixel((0, 4)) == (255, 0, 0)
-    assert restored.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 5)) == (255, 0, 0)
+    assert restored.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert restored.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 
 
 def test_restore_source_region_soft_resynthesis_ignores_soft_blend():
@@ -426,17 +431,19 @@ def test_soft_blend_vertical_seams_mk3_zero_preserves_hard_paste():
 
 def test_soft_blend_vertical_seams_mk3_feathers_only_boundary_band():
     mk3 = load_mk3_module_for_test()
-    source = Image.new("RGB", (1, 4), "red")
-    generated = Image.new("RGB", (1, 8), "blue")
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
 
     blended = mk3.soft_blend_vertical_seams(generated, source, 2, 2)
 
     assert blended.getpixel((0, 0)) == (0, 0, 255)
-    assert blended.getpixel((0, 7)) == (0, 0, 255)
+    assert blended.getpixel((0, 9)) == (0, 0, 255)
     assert blended.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
-    assert blended.getpixel((0, 3)) == (255, 0, 0)
+    assert blended.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
     assert blended.getpixel((0, 4)) == (255, 0, 0)
-    assert blended.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 5)) == (255, 0, 0)
+    assert blended.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 ```
 
 Run:
