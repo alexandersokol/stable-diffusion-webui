@@ -502,7 +502,8 @@ def test_expand_vertical_once_soft_blends_current_image_after_generation():
     assert info == "info-101"
     assert result.size == (4, 8)
     assert result.getpixel((0, 4)) not in [(255, 0, 0), (0, 0, 255)]
-    assert result.getpixel((0, 5)) == (255, 0, 0)
+    assert result.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.getpixel((0, 6)) == (255, 0, 0)
 ```
 
 Run:
