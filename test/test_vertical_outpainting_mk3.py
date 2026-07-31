@@ -256,6 +256,73 @@ def test_soft_blend_vertical_seams_mk3_feathers_only_boundary_band():
     assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 
 
+def test_soft_blend_vertical_seams_mk3_partitions_oversized_two_sided_bands():
+    mk3 = load_mk3_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 15), "blue")
+
+    blended = mk3.soft_blend_vertical_seams(generated, source, 5, 99)
+
+    assert [blended.getpixel((0, y)) for y in range(15)] == [
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (63, 0, 191),
+        (127, 0, 127),
+        (191, 0, 63),
+        (170, 0, 85),
+        (85, 0, 170),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_top", "expected"),
+    [
+        (
+            0,
+            [
+                (255, 0, 0),
+                (255, 0, 0),
+                (191, 0, 63),
+                (127, 0, 127),
+                (63, 0, 191),
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+            ],
+        ),
+        (
+            3,
+            [
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+                (63, 0, 191),
+                (127, 0, 127),
+                (191, 0, 63),
+                (255, 0, 0),
+                (255, 0, 0),
+            ],
+        ),
+    ],
+)
+def test_soft_blend_vertical_seams_mk3_preserves_one_sided_extent(source_top, expected):
+    mk3 = load_mk3_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    blended = mk3.soft_blend_vertical_seams(generated, source, source_top, 3)
+
+    assert [blended.getpixel((0, y)) for y in range(8)] == expected
+
+
 def test_expand_vertical_once_soft_blends_current_image_after_generation():
     mk3 = load_mk3_module_for_test()
     calls = []
@@ -294,3 +361,42 @@ def test_expand_vertical_once_soft_blends_current_image_after_generation():
     assert result.getpixel((0, 4)) not in [(255, 0, 0), (0, 0, 255)]
     assert result.getpixel((0, 5)) not in [(255, 0, 0), (0, 0, 255)]
     assert result.getpixel((0, 6)) == (255, 0, 0)
+
+
+def test_expand_vertical_once_zero_soft_blend_retains_generated_source_side_pixels():
+    mk3 = load_mk3_module_for_test()
+
+    class FakeProcessed:
+        def __init__(self, _p, images, seed, info, **_kwargs):
+            self.images = images
+            self.seed = seed
+            self.info = info
+
+    def fake_process(p):
+        return FakeProcessed(p, [Image.new("RGB", p.init_images[0].size, "blue")], 101, "info-101")
+
+    def split_grid(image, **_kwargs):
+        return types.SimpleNamespace(tiles=[(0, image.height, [[0, image.width, image]])])
+
+    mk3.process_images = fake_process
+    mk3.images.split_grid = split_grid
+    mk3.images.combine_grid = lambda grid: grid.tiles[0][2][0][2]
+    p = types.SimpleNamespace(
+        init_images=[],
+        image_mask=None,
+        latent_mask=None,
+        width=4,
+        height=4,
+        seed=42,
+    )
+
+    result, _seed, _info = mk3._expand_vertical_once(
+        p,
+        Image.new("RGB", (4, 4), "red"),
+        4,
+        "up",
+        0,
+        0,
+    )
+
+    assert result.getpixel((0, 4)) == (0, 0, 255)

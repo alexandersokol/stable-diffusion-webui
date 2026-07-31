@@ -179,6 +179,73 @@ def test_soft_blend_vertical_seams_feathers_only_boundary_band():
     assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 
 
+def test_soft_blend_vertical_seams_partitions_oversized_two_sided_bands():
+    mk5 = load_mk5_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 15), "blue")
+
+    blended = mk5.soft_blend_vertical_seams(generated, source, 5, 99)
+
+    assert [blended.getpixel((0, y)) for y in range(15)] == [
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (63, 0, 191),
+        (127, 0, 127),
+        (191, 0, 63),
+        (170, 0, 85),
+        (85, 0, 170),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_top", "expected"),
+    [
+        (
+            0,
+            [
+                (255, 0, 0),
+                (255, 0, 0),
+                (191, 0, 63),
+                (127, 0, 127),
+                (63, 0, 191),
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+            ],
+        ),
+        (
+            3,
+            [
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+                (63, 0, 191),
+                (127, 0, 127),
+                (191, 0, 63),
+                (255, 0, 0),
+                (255, 0, 0),
+            ],
+        ),
+    ],
+)
+def test_soft_blend_vertical_seams_preserves_one_sided_extent(source_top, expected):
+    mk5 = load_mk5_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    blended = mk5.soft_blend_vertical_seams(generated, source, source_top, 3)
+
+    assert [blended.getpixel((0, y)) for y in range(8)] == expected
+
+
 @pytest.mark.parametrize(
     ("samples_save", "original_do_not_save_samples", "save_incomplete_images", "interrupted", "skipped", "expected"),
     [

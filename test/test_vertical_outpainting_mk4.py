@@ -154,6 +154,73 @@ def test_restore_source_region_preserve_with_soft_blend_feathers_edges_only():
     assert restored.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
 
 
+def test_soft_blend_vertical_seams_mk4_partitions_oversized_two_sided_bands():
+    mk4 = load_mk4_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 15), "blue")
+
+    blended = mk4.soft_blend_vertical_seams(generated, source, 5, 99)
+
+    assert [blended.getpixel((0, y)) for y in range(15)] == [
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (63, 0, 191),
+        (127, 0, 127),
+        (191, 0, 63),
+        (170, 0, 85),
+        (85, 0, 170),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+        (0, 0, 255),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_top", "expected"),
+    [
+        (
+            0,
+            [
+                (255, 0, 0),
+                (255, 0, 0),
+                (191, 0, 63),
+                (127, 0, 127),
+                (63, 0, 191),
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+            ],
+        ),
+        (
+            3,
+            [
+                (0, 0, 255),
+                (0, 0, 255),
+                (0, 0, 255),
+                (63, 0, 191),
+                (127, 0, 127),
+                (191, 0, 63),
+                (255, 0, 0),
+                (255, 0, 0),
+            ],
+        ),
+    ],
+)
+def test_soft_blend_vertical_seams_mk4_preserves_one_sided_extent(source_top, expected):
+    mk4 = load_mk4_module_for_test()
+    source = Image.new("RGB", (1, 5), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    blended = mk4.soft_blend_vertical_seams(generated, source, source_top, 3)
+
+    assert [blended.getpixel((0, y)) for y in range(8)] == expected
+
+
 def test_restore_source_region_soft_resynthesis_ignores_soft_blend():
     mk4 = load_mk4_module_for_test()
     source = Image.new("RGB", (1, 4), "red")

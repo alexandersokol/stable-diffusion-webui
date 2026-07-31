@@ -115,21 +115,30 @@ def soft_blend_vertical_seam_bands(result, generated, source, source_top, blend_
         return result
 
     source_bottom = source_top + source.height
+    top_width = 0
+    bottom_width = 0
 
     if source_top > 0:
-        width = min(blend_width, source.height, source_top, result.height - source_top)
-        for index in range(width):
-            alpha = (index + 1) / (width + 1)
+        top_width = min(blend_width, source.height, source_top, result.height - source_top)
+    if source_bottom < result.height:
+        bottom_width = min(blend_width, source.height, source_bottom, result.height - source_bottom)
+
+    if top_width + bottom_width > source.height:
+        top_width = min(top_width, (source.height + 1) // 2)
+        bottom_width = min(bottom_width, source.height // 2)
+
+    if top_width:
+        for index in range(top_width):
+            alpha = (index + 1) / (top_width + 1)
             generated_row = generated.crop((0, source_top + index, source.width, source_top + index + 1)).convert("RGB")
             source_row = source.crop((0, index, source.width, index + 1))
             result.paste(Image.blend(generated_row, source_row, alpha), (0, source_top + index))
 
-    if source_bottom < result.height:
-        width = min(blend_width, source.height, source_bottom, result.height - source_bottom)
-        for index in range(width):
-            alpha = 1.0 - ((index + 1) / (width + 1))
-            source_y = source.height - width + index
-            result_y = source_bottom - width + index
+    if bottom_width:
+        for index in range(bottom_width):
+            alpha = 1.0 - ((index + 1) / (bottom_width + 1))
+            source_y = source.height - bottom_width + index
+            result_y = source_bottom - bottom_width + index
             generated_row = generated.crop((0, result_y, source.width, result_y + 1)).convert("RGB")
             source_row = source.crop((0, source_y, source.width, source_y + 1))
             result.paste(Image.blend(generated_row, source_row, alpha), (0, result_y))
