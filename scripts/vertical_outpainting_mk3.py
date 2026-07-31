@@ -254,10 +254,11 @@ class Script(scripts.Script):
         zoom = gr.Slider(label="Zoom in", minimum=1.0, maximum=3.0, step=0.05, value=1.0, elem_id=self.elem_id("zoom"))
         inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
+        variants_per_input = gr.Slider(label="Variants per input image", minimum=1, maximum=100, step=1, value=1, elem_id=self.elem_id("variants_per_input"))
 
-        return [pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt]
+        return [pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt, variants_per_input]
 
-    def run(self, p, pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt):
+    def run(self, p, pixels, mask_blur, soft_seam_blend, inpainting_fill, direction, shift_preset, zoom, inject_continue_prompt, continue_prompt, variants_per_input=1):
         original_prompt = p.prompt
         original_init_images = p.init_images
         original_n_iter = p.n_iter
@@ -279,6 +280,8 @@ class Script(scripts.Script):
         p.extra_generation_params["Vertical Outpainting MK3 shift preset"] = shift_preset
         p.extra_generation_params["Vertical Outpainting MK3 zoom"] = float(zoom)
         p.extra_generation_params["Vertical Outpainting MK3 inject continue prompt"] = bool(inject_continue_prompt)
+        variants_per_input = max(1, int(variants_per_input))
+        p.extra_generation_params["Vertical Outpainting MK3 variants per input image"] = variants_per_input
 
         try:
             if inject_continue_prompt:
@@ -293,26 +296,27 @@ class Script(scripts.Script):
             p.do_not_save_samples = True
 
             prepared_image = zoom_content_centered(original_init_images[0], zoom)
-            state.job_count = sum(len(passes) for _, passes in sequences)
+            state.job_count = sum(len(passes) for _, passes in sequences) * variants_per_input
 
             final_images = []
             variant_seeds = []
             variant_infos = []
 
             for preset_name, passes in sequences:
-                current_image = prepared_image.copy()
-                preset_seed = None
-                preset_info = None
-                for pass_index, (pass_direction, pass_pixels) in enumerate(passes):
-                    state.job = f"{preset_name}: pass {pass_index + 1} out of {len(passes)}"
-                    current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur, soft_seam_blend)
-                    if preset_seed is None and pass_seed is not None:
-                        preset_seed = pass_seed
-                        preset_info = pass_info
+                for variant_index in range(variants_per_input):
+                    current_image = prepared_image.copy()
+                    preset_seed = None
+                    preset_info = None
+                    for pass_index, (pass_direction, pass_pixels) in enumerate(passes):
+                        state.job = f"{preset_name}: variant {variant_index + 1} out of {variants_per_input}, pass {pass_index + 1} out of {len(passes)}"
+                        current_image, pass_seed, pass_info = _expand_vertical_once(p, current_image, pass_pixels, pass_direction, mask_blur, soft_seam_blend)
+                        if preset_seed is None and pass_seed is not None:
+                            preset_seed = pass_seed
+                            preset_info = pass_info
 
-                final_images.append(current_image)
-                variant_seeds.append(preset_seed)
-                variant_infos.append(preset_info)
+                    final_images.append(current_image)
+                    variant_seeds.append(preset_seed)
+                    variant_infos.append(preset_info)
 
             if opts.samples_save:
                 for image, seed, info in zip(final_images, variant_seeds, variant_infos):

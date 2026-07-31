@@ -179,10 +179,11 @@ class Script(scripts.Script):
         inpainting_fill = gr.Radio(label="Masked content", choices=MASKED_CONTENT_CHOICES, value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
         inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
+        variants_per_input = gr.Slider(label="Variants per input image", minimum=1, maximum=100, step=1, value=1, elem_id=self.elem_id("variants_per_input"))
 
-        return [target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt]
+        return [target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt, variants_per_input]
 
-    def run(self, p, target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt):
+    def run(self, p, target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt, variants_per_input=1):
         if not getattr(p, "init_images", None):
             return Processed(p, [], p.seed, "Vertical Outpainting Mk5 requires one source image.")
 
@@ -223,15 +224,27 @@ class Script(scripts.Script):
         p.extra_generation_params["Vertical Outpainting MK5 mask blur"] = int(mask_blur)
         p.extra_generation_params["Vertical Outpainting MK5 soft seam blend"] = int(soft_seam_blend)
         p.extra_generation_params["Vertical Outpainting MK5 continue prompt injected"] = bool(inject_continue_prompt)
+        variants_per_input = max(1, int(variants_per_input))
+        p.extra_generation_params["Vertical Outpainting MK5 variants per input image"] = variants_per_input
 
         try:
+            final_images = []
+            variant_seeds = []
+            variant_infos = []
+
             if float(scale) == 1.0 or not mask_has_white(mask):
-                final_image = target_canvas
-                p.width, p.height = final_image.size
-                infotext = _create_final_infotext(p, original_prompt, p.seed)
-                if should_save_final_samples(opts, state, original_do_not_save_samples):
-                    images.save_image(final_image, p.outpath_samples, "", p.seed, original_prompt, opts.samples_format, info=infotext, p=p)
-                return Processed(p, [final_image], p.seed, infotext, all_seeds=[p.seed], infotexts=[infotext])
+                for variant_index in range(variants_per_input):
+                    seed = p.seed + variant_index
+                    final_image = target_canvas.copy()
+                    p.width, p.height = final_image.size
+                    infotext = _create_final_infotext(p, original_prompt, seed)
+                    final_images.append(final_image)
+                    variant_seeds.append(seed)
+                    variant_infos.append(infotext)
+                    if should_save_final_samples(opts, state, original_do_not_save_samples):
+                        images.save_image(final_image, p.outpath_samples, "", seed, original_prompt, opts.samples_format, info=infotext, p=p)
+
+                return Processed(p, final_images, variant_seeds[0], variant_infos[0], all_seeds=variant_seeds, infotexts=variant_infos)
 
             if inject_continue_prompt:
                 p.prompt = _append_continue_prompt(p.prompt, continue_prompt)
@@ -245,35 +258,44 @@ class Script(scripts.Script):
             p.mask_blur = int(mask_blur)
             p.inpainting_fill = inpainting_fill
             p.inpainting_mask_invert = 0
-            state.job_count = 1
-            state.job = "Vertical Outpainting Mk5: final canvas"
+            state.job_count = variants_per_input
 
-            p.init_images = [target_canvas]
-            p.image_mask = mask
-            had_save_init_img = hasattr(opts, "save_init_img")
-            original_save_init_img = getattr(opts, "save_init_img", False)
-            try:
-                opts.save_init_img = False
-                processed = process_images(p)
-            finally:
-                if had_save_init_img:
-                    opts.save_init_img = original_save_init_img
-                elif hasattr(opts, "save_init_img"):
-                    delattr(opts, "save_init_img")
+            for variant_index in range(variants_per_input):
+                state.job = f"Vertical Outpainting Mk5: variant {variant_index + 1} out of {variants_per_input}, final canvas"
 
-            if not processed.images:
+                p.init_images = [target_canvas]
+                p.image_mask = mask
+                had_save_init_img = hasattr(opts, "save_init_img")
+                original_save_init_img = getattr(opts, "save_init_img", False)
+                try:
+                    opts.save_init_img = False
+                    processed = process_images(p)
+                finally:
+                    if had_save_init_img:
+                        opts.save_init_img = original_save_init_img
+                    elif hasattr(opts, "save_init_img"):
+                        delattr(opts, "save_init_img")
+
+                if not processed.images:
+                    break
+
+                generated_image = processed.images[0]
+                if generated_image.size != target_canvas.size:
+                    generated_image = generated_image.resize(target_canvas.size, Image.Resampling.LANCZOS)
+                final_image = restore_prepared_source(generated_image, prepared_source, source_top, soft_seam_blend)
+                p.width, p.height = final_image.size
+                infotext = _create_final_infotext(p, original_prompt, processed.seed)
+                final_images.append(final_image)
+                variant_seeds.append(processed.seed)
+                variant_infos.append(infotext)
+                if should_save_final_samples(opts, state, original_do_not_save_samples):
+                    images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=infotext, p=p)
+                p.seed = processed.seed + 1
+
+            if not final_images:
                 return Processed(p, [], p.seed, "Vertical Outpainting Mk5 generation returned no images.", all_seeds=[], infotexts=[])
 
-            generated_image = processed.images[0]
-            if generated_image.size != target_canvas.size:
-                generated_image = generated_image.resize(target_canvas.size, Image.Resampling.LANCZOS)
-            final_image = restore_prepared_source(generated_image, prepared_source, source_top, soft_seam_blend)
-            p.width, p.height = final_image.size
-            infotext = _create_final_infotext(p, original_prompt, processed.seed)
-            if should_save_final_samples(opts, state, original_do_not_save_samples):
-                images.save_image(final_image, p.outpath_samples, "", processed.seed, original_prompt, opts.samples_format, info=infotext, p=p)
-
-            return Processed(p, [final_image], processed.seed, infotext, all_seeds=[processed.seed], infotexts=[infotext])
+            return Processed(p, final_images, variant_seeds[0], variant_infos[0], all_seeds=variant_seeds, infotexts=variant_infos)
         finally:
             p.prompt = original_prompt
             p.init_images = original_init_images

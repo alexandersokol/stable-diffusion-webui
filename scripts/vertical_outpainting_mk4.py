@@ -199,10 +199,11 @@ class Script(scripts.Script):
         inpainting_fill = gr.Radio(label="Masked content", choices=MASKED_CONTENT_CHOICES, value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
         inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
+        variants_per_input = gr.Slider(label="Variants per input image", minimum=1, maximum=100, step=1, value=1, elem_id=self.elem_id("variants_per_input"))
 
-        return [target_height, source_placement, source_handling, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt]
+        return [target_height, source_placement, source_handling, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt, variants_per_input]
 
-    def run(self, p, target_height, source_placement, source_handling, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt):
+    def run(self, p, target_height, source_placement, source_handling, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt, variants_per_input=1):
         if not getattr(p, "init_images", None):
             return Processed(p, [], p.seed, "Vertical Outpainting Mk4 requires one source image.")
 
@@ -239,6 +240,8 @@ class Script(scripts.Script):
         p.extra_generation_params["Vertical Outpainting MK4 mask blur"] = int(mask_blur)
         p.extra_generation_params["Vertical Outpainting MK4 soft seam blend"] = int(soft_seam_blend)
         p.extra_generation_params["Vertical Outpainting MK4 continue prompt injected"] = bool(inject_continue_prompt)
+        variants_per_input = max(1, int(variants_per_input))
+        p.extra_generation_params["Vertical Outpainting MK4 variants per input image"] = variants_per_input
 
         final_images = []
         variant_seeds = []
@@ -257,26 +260,30 @@ class Script(scripts.Script):
             p.mask_blur = int(mask_blur)
             p.inpainting_fill = SOFT_RESYNTHESIS_INPAINTING_FILL if source_handling == "Soft resynthesis" else inpainting_fill
             p.inpainting_mask_invert = 0
-            state.job_count = len(placements)
+            state.job_count = len(placements) * variants_per_input
 
             for index, (placement_name, source_top) in enumerate(placements):
-                state.job = f"{placement_name}: final canvas {index + 1} out of {len(placements)}"
-                target_canvas = create_target_canvas(source, target_height, source_top)
-                mask = build_source_mask(source.size, target_height, source_top, source_handling, seam_size)
+                for variant_index in range(variants_per_input):
+                    state.job = f"{placement_name}: variant {variant_index + 1} out of {variants_per_input}, final canvas {index + 1} out of {len(placements)}"
+                    target_canvas = create_target_canvas(source, target_height, source_top)
+                    mask = build_source_mask(source.size, target_height, source_top, source_handling, seam_size)
 
-                p.init_images = [target_canvas]
-                p.image_mask = mask
-                processed = process_images(p)
+                    p.init_images = [target_canvas]
+                    p.image_mask = mask
+                    processed = process_images(p)
 
-                if not processed.images:
-                    break
+                    if not processed.images:
+                        break
 
-                generated = processed.images[0]
-                final_image = restore_source_region(generated, source, source_top, source_handling, seam_size, soft_seam_blend)
-                final_images.append(final_image)
-                variant_seeds.append(processed.seed)
-                variant_infos.append(processed.info)
-                p.seed = processed.seed + 1
+                    generated = processed.images[0]
+                    final_image = restore_source_region(generated, source, source_top, source_handling, seam_size, soft_seam_blend)
+                    final_images.append(final_image)
+                    variant_seeds.append(processed.seed)
+                    variant_infos.append(processed.info)
+                    p.seed = processed.seed + 1
+                else:
+                    continue
+                break
 
             should_save_samples = (
                 opts.samples_save

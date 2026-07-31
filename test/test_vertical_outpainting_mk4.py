@@ -335,6 +335,30 @@ def test_run_generates_all_final_placements_and_saves_without_grid():
     assert saved == [((4, 8), seed, f"info-{seed}", True) for seed in result.all_seeds]
 
 
+def test_run_generates_variants_for_each_final_placement():
+    mk4 = load_mk4_module_for_test()
+    calls = []
+
+    def fake_process(p):
+        seed = 100 + len(calls)
+        calls.append((p.init_images[0].size, p.image_mask.size))
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), (seed, 0, 0))], seed, f"info-{seed}")
+
+    mk4.Processed = FakeProcessed
+    mk4.process_images = fake_process
+    mk4.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk4.state = types.SimpleNamespace(job="", job_count=0)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+
+    result = mk4.Script().run(p, 8, "All", "Preserve source pixels", 1, 4, 0, 0, False, "", 2)
+
+    assert len(result.images) == 10
+    assert result.all_seeds == list(range(100, 110))
+    assert result.infotexts == [f"info-{seed}" for seed in result.all_seeds]
+    assert p.extra_generation_params["Vertical Outpainting MK4 variants per input image"] == 2
+    assert calls == [((4, 8), (4, 8))] * 10
+
+
 def test_run_preserves_source_pixels_or_leaves_soft_resynthesis_generated():
     mk4 = load_mk4_module_for_test()
 

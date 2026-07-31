@@ -199,6 +199,50 @@ def test_run_uses_each_preset_representative_metadata_for_saved_and_returned_ima
     assert p.extra_generation_params["Vertical Outpainting MK3 soft seam blend"] == 32
 
 
+def test_run_generates_variants_for_each_selected_preset():
+    mk3 = load_mk3_module_for_test()
+    calls = []
+
+    class FakeProcessed:
+        def __init__(self, _p, images, seed, info, **kwargs):
+            self.images = images
+            self.seed = seed
+            self.info = info
+            self.all_seeds = kwargs.get("all_seeds")
+            self.infotexts = kwargs.get("infotexts")
+
+    def expand_once(_p, image, _pixels, direction, _mask_blur, _soft_seam_blend):
+        seed = 100 + len(calls)
+        calls.append(direction)
+        return image, seed, f"info-{seed}"
+
+    mk3.Processed = FakeProcessed
+    mk3._expand_vertical_once = expand_once
+    mk3.opts = types.SimpleNamespace(samples_save=False, samples_format="png")
+    mk3.state = types.SimpleNamespace()
+    p = types.SimpleNamespace(
+        prompt="base prompt",
+        init_images=[Image.new("RGB", (16, 16), "blue")],
+        n_iter=1,
+        batch_size=1,
+        do_not_save_grid=False,
+        do_not_save_samples=False,
+        mask_blur=0,
+        inpainting_fill=0,
+        inpaint_full_res=True,
+        extra_generation_params={},
+        outpath_samples="samples",
+        seed=42,
+    )
+
+    result = mk3.Script().run(p, 8, 4, 32, 0, ["up", "down"], "All", 1.0, False, "", 2)
+
+    assert len(result.images) == 10
+    assert result.all_seeds == [100, 102, 104, 106, 108, 110, 112, 115, 118, 121]
+    assert p.extra_generation_params["Vertical Outpainting MK3 variants per input image"] == 2
+    assert len(calls) == 24
+
+
 def test_run_distinguishes_invalid_preset_from_missing_direction():
     mk3 = load_mk3_module_for_test()
 

@@ -333,6 +333,33 @@ def test_run_generates_one_final_image_restores_source_and_saves():
     assert result.images[0].getpixel((0, 2)) == (255, 0, 0)
 
 
+def test_run_generates_requested_number_of_final_variants():
+    mk5 = load_mk5_module_for_test()
+    calls = []
+    saved = []
+
+    def fake_process(p):
+        seed = 100 + len(calls)
+        calls.append((p.init_images[0].size, p.image_mask.size, p.width, p.height))
+        return FakeProcessed(p, [Image.new("RGB", (p.width, p.height), (0, 0, seed))], seed, f"info-{seed}")
+
+    mk5.Processed = FakeProcessed
+    mk5.process_images = fake_process
+    mk5.opts = types.SimpleNamespace(samples_save=True, save_incomplete_images=False, samples_format="png")
+    mk5.images.save_image = lambda image, _path, _basename, seed, _prompt, _format, info, p: saved.append((image.size, seed, info, p.do_not_save_grid))
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (4, 4), "red"))
+
+    result = mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, 0, False, "", 3)
+
+    assert len(result.images) == 3
+    assert result.all_seeds == [100, 101, 102]
+    assert result.infotexts == [result.info, result.info.replace("Seed: 100", "Seed: 101"), result.info.replace("Seed: 100", "Seed: 102")]
+    assert p.extra_generation_params["Vertical Outpainting MK5 variants per input image"] == 3
+    assert calls == [((4, 8), (4, 8), 4, 8)] * 3
+    assert saved == [(image.size, seed, info, True) for image, seed, info in zip(result.images, result.all_seeds, result.infotexts)]
+
+
 def test_run_records_soft_seam_blend_metadata_and_applies_blend():
     mk5 = load_mk5_module_for_test()
     mk5.Processed = FakeProcessed
