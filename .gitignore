@@ -41,5 +41,6 @@ notification.mp3
 /.coverage*
 /test/test_outputs
 /cache
+/ranbooru_cache.sqlite
 trace.json
 /sysinfo-????-??-??-??-??.json
