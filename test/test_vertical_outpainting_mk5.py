@@ -150,6 +150,35 @@ def test_restore_prepared_source_pastes_exact_pixels():
     ]
 
 
+def test_soft_blend_vertical_seams_zero_preserves_hard_paste_result():
+    mk5 = load_mk5_module_for_test()
+    source = Image.new("RGB", (1, 4), "red")
+    generated = Image.new("RGB", (1, 8), "blue")
+
+    hard = generated.copy()
+    hard.paste(source, (0, 2))
+    blended = mk5.soft_blend_vertical_seams(generated, source, 2, 0)
+
+    assert blended.tobytes() == hard.tobytes()
+
+
+def test_soft_blend_vertical_seams_feathers_only_boundary_band():
+    mk5 = load_mk5_module_for_test()
+    source = Image.new("RGB", (1, 6), "red")
+    generated = Image.new("RGB", (1, 10), "blue")
+
+    blended = mk5.soft_blend_vertical_seams(generated, source, 2, 2)
+
+    assert blended.getpixel((0, 0)) == (0, 0, 255)
+    assert blended.getpixel((0, 9)) == (0, 0, 255)
+    assert blended.getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 4)) == (255, 0, 0)
+    assert blended.getpixel((0, 5)) == (255, 0, 0)
+    assert blended.getpixel((0, 6)) not in [(255, 0, 0), (0, 0, 255)]
+    assert blended.getpixel((0, 7)) not in [(255, 0, 0), (0, 0, 255)]
+
+
 @pytest.mark.parametrize(
     ("samples_save", "original_do_not_save_samples", "save_incomplete_images", "interrupted", "skipped", "expected"),
     [
@@ -224,7 +253,7 @@ def test_run_generates_one_final_image_restores_source_and_saves():
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     p = make_p(Image.new("RGB", (4, 4), "red"))
 
-    result = mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, 0, False, "")
 
     assert len(result.images) == 1
     assert result.seed == 101
@@ -235,6 +264,22 @@ def test_run_generates_one_final_image_restores_source_and_saves():
     assert calls == [((4, 8), (4, 8), 4, 8, 0, True)]
     assert saved == [((4, 8), 101, result.info, True)]
     assert result.images[0].getpixel((0, 2)) == (255, 0, 0)
+
+
+def test_run_records_soft_seam_blend_metadata_and_applies_blend():
+    mk5 = load_mk5_module_for_test()
+    mk5.Processed = FakeProcessed
+    mk5.process_images = lambda p: FakeProcessed(p, [Image.new("RGB", (p.width, p.height), "blue")], 101, "info-101")
+    mk5.opts = types.SimpleNamespace(samples_save=False, save_incomplete_images=False, samples_format="png")
+    mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
+    p = make_p(Image.new("RGB", (1, 6), "red"))
+
+    result = mk5.Script().run(p, 10, 0.0, "Center", 1, 4, 2, 0, False, "")
+
+    assert result.images[0].getpixel((0, 2)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.images[0].getpixel((0, 3)) not in [(255, 0, 0), (0, 0, 255)]
+    assert result.images[0].getpixel((0, 4)) == (255, 0, 0)
+    assert p.extra_generation_params["Vertical Outpainting MK5 soft seam blend"] == 2
 
 
 def test_run_normalizes_mutated_generation_size_and_restores_prepared_source():
@@ -251,7 +296,7 @@ def test_run_normalizes_mutated_generation_size_and_restores_prepared_source():
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     source = Image.new("RGB", (4, 4), "red")
 
-    result = mk5.Script().run(make_p(source), 8, 0.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(make_p(source), 8, 0.0, "Center", 1, 4, 0, 0, False, "")
 
     assert result.images[0].size == (4, 8)
     assert (result.width, result.height) == (4, 8)
@@ -271,7 +316,7 @@ def test_run_no_gap_returns_source_only_without_processing():
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     source = Image.new("RGB", (4, 4), "red")
 
-    result = mk5.Script().run(make_p(source), 4, 0.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(make_p(source), 4, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert calls == []
     assert len(result.images) == 1
@@ -291,7 +336,7 @@ def test_run_scale_one_returns_prepared_source_only_without_processing():
         for x in range(source.width):
             source.putpixel((x, y), (x * 40, y * 60, 0))
 
-    result = mk5.Script().run(make_p(source), 8, 1.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(make_p(source), 8, 1.0, "Center", 1, 4, 32, 0, False, "")
 
     assert calls == []
     assert len(result.images) == 1
@@ -309,7 +354,7 @@ def test_run_empty_generation_returns_no_placeholder_and_saves_nothing():
     mk5.images.save_image = lambda *args, **kwargs: saved.append(args)
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
 
-    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 8, 0.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 8, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert result.images == []
     assert result.all_seeds == []
@@ -333,7 +378,7 @@ def test_run_restores_prompt_and_processing_state():
     p = make_p(Image.new("RGB", (4, 4), "red"))
     original_init_images = p.init_images
 
-    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, True, "continue naturally")
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 32, 0, True, "continue naturally")
 
     assert prompts_seen == ["base prompt, continue naturally"]
     assert p.prompt == "base prompt"
@@ -385,7 +430,7 @@ def test_run_restores_asymmetric_mask_blur_axes():
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
     p = FakeAsymmetricBlurProcessing(Image.new("RGB", (4, 4), "red"))
 
-    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert (p.mask_blur_x, p.mask_blur_y) == (3, 7)
     assert p.mask_blur is None
@@ -402,7 +447,7 @@ def test_run_honors_save_suppression_and_records_metadata():
     p = make_p(Image.new("RGB", (4, 4), "red"))
     p.do_not_save_samples = True
 
-    mk5.Script().run(p, 8, 0.25, "Bottom", 8, 4, 0, True, "continue naturally")
+    mk5.Script().run(p, 8, 0.25, "Bottom", 8, 4, 32, 0, True, "continue naturally")
 
     assert saved == []
     assert p.extra_generation_params["Vertical Outpainting MK5 target height"] == 8
@@ -434,7 +479,7 @@ def test_run_suppresses_internal_init_save_and_restores_option():
     p = make_p(Image.new("RGB", (4, 4), "red"))
     p.do_not_save_samples = True
 
-    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert mk5.opts.save_init_img is True
     assert saved == []
@@ -446,10 +491,10 @@ def test_run_returns_clear_errors_for_missing_source_and_small_target():
 
     missing = make_p(Image.new("RGB", (2, 4), "red"))
     missing.init_images = []
-    missing_result = mk5.Script().run(missing, 8, 0.0, "Center", 1, 4, 0, False, "")
+    missing_result = mk5.Script().run(missing, 8, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     small = make_p(Image.new("RGB", (2, 4), "red"))
-    small_result = mk5.Script().run(small, 2, 0.0, "Center", 1, 4, 0, False, "")
+    small_result = mk5.Script().run(small, 2, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert missing_result.info == "Vertical Outpainting Mk5 requires one source image."
     assert small_result.info == "Target height must be greater than or equal to the source image height."
@@ -464,7 +509,7 @@ def test_run_removes_temporary_mask_invert_when_original_object_lacked_it():
     p = make_p(Image.new("RGB", (4, 4), "red"))
     delattr(p, "inpainting_mask_invert")
 
-    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 0, False, "")
+    mk5.Script().run(p, 8, 0.0, "Center", 1, 4, 32, 0, False, "")
 
     assert not hasattr(p, "inpainting_mask_invert")
 
@@ -480,7 +525,7 @@ def test_run_no_gap_saves_source_only_result_when_allowed():
     )
     mk5.state = types.SimpleNamespace(job="", job_count=0, interrupted=False, skipped=False)
 
-    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 4, 1.0, "Center", 1, 4, 0, False, "")
+    result = mk5.Script().run(make_p(Image.new("RGB", (4, 4), "red")), 4, 1.0, "Center", 1, 4, 32, 0, False, "")
 
     assert len(result.images) == 1
     assert (result.width, result.height) == (4, 4)

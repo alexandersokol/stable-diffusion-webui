@@ -82,9 +82,45 @@ def build_outpaint_mask(source_size, target_height, source_top, seam_size):
     return mask
 
 
-def restore_prepared_source(generated, prepared_source, source_top):
+def restore_prepared_source(generated, prepared_source, source_top, soft_seam_blend=0):
+    if int(soft_seam_blend) > 0:
+        return soft_blend_vertical_seams(generated, prepared_source, source_top, soft_seam_blend)
+
     result = generated.copy()
     result.paste(prepared_source.convert("RGB"), (0, int(source_top)))
+    return result
+
+
+def soft_blend_vertical_seams(generated, source, source_top, blend_width):
+    result = generated.copy().convert("RGB")
+    source = source.convert("RGB")
+    source_top = int(source_top)
+    blend_width = max(0, min(int(blend_width), source.height, result.height))
+    if blend_width <= 0:
+        result.paste(source, (0, source_top))
+        return result
+
+    source_bottom = source_top + source.height
+    result.paste(source, (0, source_top))
+
+    if source_top > 0:
+        width = min(blend_width, source.height, source_top, result.height - source_top)
+        for index in range(width):
+            alpha = (index + 1) / (width + 1)
+            generated_row = generated.crop((0, source_top + index, source.width, source_top + index + 1)).convert("RGB")
+            source_row = source.crop((0, index, source.width, index + 1))
+            result.paste(Image.blend(generated_row, source_row, alpha), (0, source_top + index))
+
+    if source_bottom < result.height:
+        width = min(blend_width, source.height, source_bottom, result.height - source_bottom)
+        for index in range(width):
+            alpha = 1.0 - ((index + 1) / (width + 1))
+            source_y = source.height - width + index
+            result_y = source_bottom - width + index
+            generated_row = generated.crop((0, result_y, source.width, result_y + 1)).convert("RGB")
+            source_row = source.crop((0, source_y, source.width, source_y + 1))
+            result.paste(Image.blend(generated_row, source_row, alpha), (0, result_y))
+
     return result
 
 
@@ -130,13 +166,14 @@ class Script(scripts.Script):
         placement = gr.Dropdown(label="Placement", choices=PLACEMENT_CHOICES, value="Center", elem_id=self.elem_id("placement"))
         seam_size = gr.Slider(label="Seam size", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("seam_size"))
         mask_blur = gr.Slider(label="Mask blur", minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
+        soft_seam_blend = gr.Slider(label="Soft seam blend", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("soft_seam_blend"))
         inpainting_fill = gr.Radio(label="Masked content", choices=MASKED_CONTENT_CHOICES, value="fill", type="index", elem_id=self.elem_id("inpainting_fill"))
         inject_continue_prompt = gr.Checkbox(label="Inject continue prompt", value=False, elem_id=self.elem_id("inject_continue_prompt"))
         continue_prompt = gr.Textbox(label="Continue prompt", value=DEFAULT_CONTINUE_PROMPT, lines=2, elem_id=self.elem_id("continue_prompt"))
 
-        return [target_height, scale, placement, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt]
+        return [target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt]
 
-    def run(self, p, target_height, scale, placement, seam_size, mask_blur, inpainting_fill, inject_continue_prompt, continue_prompt):
+    def run(self, p, target_height, scale, placement, seam_size, mask_blur, soft_seam_blend, inpainting_fill, inject_continue_prompt, continue_prompt):
         if not getattr(p, "init_images", None):
             return Processed(p, [], p.seed, "Vertical Outpainting Mk5 requires one source image.")
 
@@ -175,6 +212,7 @@ class Script(scripts.Script):
         p.extra_generation_params["Vertical Outpainting MK5 placement"] = placement
         p.extra_generation_params["Vertical Outpainting MK5 seam size"] = int(seam_size)
         p.extra_generation_params["Vertical Outpainting MK5 mask blur"] = int(mask_blur)
+        p.extra_generation_params["Vertical Outpainting MK5 soft seam blend"] = int(soft_seam_blend)
         p.extra_generation_params["Vertical Outpainting MK5 continue prompt injected"] = bool(inject_continue_prompt)
 
         try:
@@ -220,7 +258,7 @@ class Script(scripts.Script):
             generated_image = processed.images[0]
             if generated_image.size != target_canvas.size:
                 generated_image = generated_image.resize(target_canvas.size, Image.Resampling.LANCZOS)
-            final_image = restore_prepared_source(generated_image, prepared_source, source_top)
+            final_image = restore_prepared_source(generated_image, prepared_source, source_top, soft_seam_blend)
             p.width, p.height = final_image.size
             infotext = _create_final_infotext(p, original_prompt, processed.seed)
             if should_save_final_samples(opts, state, original_do_not_save_samples):
