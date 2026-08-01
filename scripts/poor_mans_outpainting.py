@@ -20,6 +20,11 @@ class Script(scripts.Script):
         if not is_img2img:
             return None
 
+        gr.Markdown(
+            "**Poor man's outpainting** expands an img2img source image on the selected sides by splitting the enlarged canvas into masked generation tiles. "
+            "Use one source image, choose the directions and masked content mode, then run. "
+            "The result is one completed outpainted image assembled from the generated tiles."
+        )
         pixels = gr.Slider(label="Pixels to expand", minimum=8, maximum=256, step=8, value=128, elem_id=self.elem_id("pixels"))
         mask_blur = gr.Slider(label='Mask blur', minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
         inpainting_fill = gr.Radio(label='Masked content', choices=['fill', 'original', 'latent noise', 'latent nothing'], value='fill', type="index", elem_id=self.elem_id("inpainting_fill"))

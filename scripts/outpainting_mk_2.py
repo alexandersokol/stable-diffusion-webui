@@ -117,6 +117,11 @@ class Script(scripts.Script):
         if not is_img2img:
             return None
 
+        gr.Markdown(
+            "**Outpainting mk2** expands an img2img source image in the selected directions using matched noise and masked generation. "
+            "Use one source image, choose the sides to extend, keep the recommended settings as a starting point, and run. "
+            "The result is one completed outpainted image with the original image continued into the new areas."
+        )
         info = gr.HTML("<p style=\"margin-bottom:0.75em\">Recommended settings: Sampling Steps: 80-100, Sampler: Euler a, Denoising strength: 0.8</p>")
 
         pixels = gr.Slider(label="Pixels to expand", minimum=8, maximum=256, step=8, value=128, elem_id=self.elem_id("pixels"))

@@ -190,6 +190,11 @@ class Script(scripts.Script):
         if not is_img2img:
             return None
 
+        gr.Markdown(
+            "**Vertical Outpainting Mk4** creates taller img2img outputs by placing the source image inside a target height and generating the uncovered vertical space. "
+            "Use one source image, set the target height, choose source placement and source handling, then run. "
+            "The result is one or more final completed images at the requested target height."
+        )
         target_height = gr.Slider(label="Target height", minimum=64, maximum=4096, step=64, value=2048, elem_id=self.elem_id("target_height"))
         source_placement = gr.Dropdown(label="Source placement", choices=PLACEMENT_CHOICES, value="All", elem_id=self.elem_id("source_placement"))
         source_handling = gr.Dropdown(label="Source handling", choices=SOURCE_HANDLING_CHOICES, value="Preserve source pixels", elem_id=self.elem_id("source_handling"))

@@ -170,6 +170,11 @@ class Script(scripts.Script):
         if not is_img2img:
             return None
 
+        gr.Markdown(
+            "**Vertical Outpainting Mk5** creates a taller img2img output by fitting the source into a target-height canvas, optionally scaling the source content before generating the remaining vertical gaps. "
+            "Use one source image, set target height, scale, placement, and variants count, then run. "
+            "The result is one or more final completed images at the target height, with generated areas filling any uncovered space."
+        )
         target_height = gr.Slider(label="Target height", minimum=64, maximum=4096, step=64, value=2048, elem_id=self.elem_id("target_height"))
         scale = gr.Slider(label="Scale", minimum=0.0, maximum=1.0, step=0.05, value=0.0, elem_id=self.elem_id("scale"))
         placement = gr.Dropdown(label="Placement", choices=PLACEMENT_CHOICES, value="Center", elem_id=self.elem_id("placement"))

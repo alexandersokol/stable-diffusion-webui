@@ -245,6 +245,11 @@ class Script(scripts.Script):
         if not is_img2img:
             return None
 
+        gr.Markdown(
+            "**Vertical Outpainting Mk3** performs sequential vertical outpainting from an img2img source image, using shift presets for centered, top, bottom, and mixed vertical expansions. "
+            "Use one source image, select up/down directions, choose a shift preset and variants count, then run. "
+            "The result is one or more final completed images per selected shift preset."
+        )
         pixels = gr.Slider(label="Pixels to expand", minimum=8, maximum=384, step=8, value=384, elem_id=self.elem_id("pixels"))
         mask_blur = gr.Slider(label="Mask blur", minimum=0, maximum=64, step=1, value=4, elem_id=self.elem_id("mask_blur"))
         soft_seam_blend = gr.Slider(label="Soft seam blend", minimum=0, maximum=128, step=8, value=32, elem_id=self.elem_id("soft_seam_blend"))
