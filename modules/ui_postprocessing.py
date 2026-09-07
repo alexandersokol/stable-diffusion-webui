@@ -22,6 +22,10 @@ def create_ui():
                     extras_batch_output_dir = gr.Textbox(label="Output directory", **shared.hide_dirs, placeholder="Leave blank to save images to the default path.", elem_id="extras_batch_output_dir")
                     show_extras_results = gr.Checkbox(label='Show result images', value=True, elem_id="extras_show_extras_results")
 
+            with gr.Row():
+                extras_save_format = gr.Radio(label="Save format", choices=["jpg", "png", "webp"], value="jpg", elem_id="extras_save_format")
+                extras_jpeg_quality = gr.Slider(minimum=1, maximum=100, step=1, label="JPG quality", value=90, elem_id="extras_jpeg_quality")
+
             script_inputs = scripts.scripts_postproc.setup_ui()
 
         with gr.Column():
@@ -46,6 +50,8 @@ def create_ui():
             extras_batch_input_dir,
             extras_batch_output_dir,
             show_extras_results,
+            extras_save_format,
+            extras_jpeg_quality,
             *script_inputs
         ],
         outputs=[

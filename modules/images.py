@@ -626,7 +626,7 @@ class FilenameGenerator:
         return res
 
 
-def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_pnginfo=None, pnginfo_section_name='parameters'):
+def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_pnginfo=None, pnginfo_section_name='parameters', jpeg_quality=None):
     """
     Saves image to filename, including geninfo as text information for generation info.
     For PNG images, geninfo is added to existing pnginfo dictionary using the pnginfo_section_name argument as key.
@@ -637,6 +637,8 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         extension = os.path.splitext(filename)[1]
 
     image_format = Image.registered_extensions()[extension]
+    save_quality = opts.jpeg_quality if jpeg_quality is None else int(jpeg_quality)
+    save_quality = max(1, min(100, save_quality))
 
     if extension.lower() == '.png':
         existing_pnginfo = existing_pnginfo or {}
@@ -650,7 +652,7 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         else:
             pnginfo_data = None
 
-        image.save(filename, format=image_format, quality=opts.jpeg_quality, pnginfo=pnginfo_data, compress_level=get_png_compress_level())
+        image.save(filename, format=image_format, quality=save_quality, pnginfo=pnginfo_data, compress_level=get_png_compress_level())
 
     elif extension.lower() in (".jpg", ".jpeg", ".webp"):
         if image.mode == 'RGBA':
@@ -658,7 +660,7 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         elif image.mode == 'I;16':
             image = image.point(lambda p: p * 0.0038910505836576).convert("RGB" if extension.lower() == ".webp" else "L")
 
-        image.save(filename, format=image_format, quality=opts.jpeg_quality, lossless=opts.webp_lossless)
+        image.save(filename, format=image_format, quality=save_quality, lossless=opts.webp_lossless)
 
         if opts.enable_pnginfo and geninfo is not None:
             exif_bytes = piexif.dump({
@@ -678,11 +680,11 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         else:
             exif_bytes = None
 
-        image.save(filename,format=image_format, quality=opts.jpeg_quality, exif=exif_bytes)
+        image.save(filename,format=image_format, quality=save_quality, exif=exif_bytes)
     elif extension.lower() == ".gif":
         image.save(filename, format=image_format, comment=geninfo)
     else:
-        image.save(filename, format=image_format, quality=opts.jpeg_quality)
+        image.save(filename, format=image_format, quality=save_quality)
 
 
 def get_png_compress_level():
@@ -694,7 +696,7 @@ def get_png_compress_level():
     return max(0, min(9, compress_level))
 
 
-def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None):
+def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None, jpeg_quality=None):
     """Save an image.
 
     Args:
@@ -782,7 +784,7 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
         """
         temp_file_path = f"{filename_without_extension}.tmp"
 
-        save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name)
+        save_image_with_geninfo(image_to_save, info, temp_file_path, extension, existing_pnginfo=params.pnginfo, pnginfo_section_name=pnginfo_section_name, jpeg_quality=jpeg_quality)
 
         filename = filename_without_extension + extension
         if shared.opts.save_images_replace_action != "Replace":
