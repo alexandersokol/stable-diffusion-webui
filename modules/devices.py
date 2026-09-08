@@ -142,7 +142,7 @@ def get_device_for(task):
     return get_optimal_device()
 
 
-def torch_gc(force=False):
+def torch_gc(force=False, collect_ipc=False):
     now = time.monotonic()
 
     if torch.cuda.is_available():
@@ -150,7 +150,8 @@ def torch_gc(force=False):
         if should_run_torch_gc("cuda", force=force, memory_pressure=cuda_pressure, now=now):
             with torch.cuda.device(get_cuda_device_string()):
                 torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
+                if force or collect_ipc:
+                    torch.cuda.ipc_collect()
             record_torch_gc_run("cuda", now=now)
 
     if has_mps() and should_run_torch_gc("mps", force=force, now=now):

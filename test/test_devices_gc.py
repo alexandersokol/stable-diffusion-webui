@@ -120,7 +120,7 @@ def test_torch_gc_runs_when_cuda_free_memory_is_low():
         restore()
 
     assert fake_cuda.empty_cache_calls == 1
-    assert fake_cuda.ipc_collect_calls == 1
+    assert fake_cuda.ipc_collect_calls == 0
 
 
 def test_torch_gc_runs_when_cuda_cached_reserved_memory_is_high():
@@ -134,7 +134,7 @@ def test_torch_gc_runs_when_cuda_cached_reserved_memory_is_high():
         restore()
 
     assert fake_cuda.empty_cache_calls == 1
-    assert fake_cuda.ipc_collect_calls == 1
+    assert fake_cuda.ipc_collect_calls == 0
 
 
 def test_torch_gc_throttles_non_cuda_backends():
