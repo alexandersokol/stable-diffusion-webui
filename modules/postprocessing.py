@@ -6,7 +6,7 @@ from modules import shared, images, devices, scripts, scripts_postprocessing, ui
 from modules.shared import opts
 
 
-def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True, save_format=None, jpeg_quality=None):
+def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True, save_format=None, jpeg_quality=None, skip_existing_files: bool = False):
     devices.torch_gc()
 
     shared.state.begin(job="extras")
@@ -43,6 +43,14 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
 
     data_to_process = list(get_images(extras_mode, image, image_folder, input_dir))
     shared.state.job_count = len(data_to_process)
+    output_format = save_format or opts.samples_format
+
+    def output_exists(basename, suffix=""):
+        if not skip_existing_files or not save_output or not basename:
+            return False
+
+        filename = f"{basename}{suffix}.{output_format}"
+        return os.path.exists(os.path.join(outpath, filename))
 
     for image_placeholder, name in data_to_process:
         image_data: Image.Image
@@ -53,6 +61,10 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
 
         if shared.state.interrupted or shared.state.stopping_generation:
             break
+
+        basename = os.path.splitext(os.path.basename(name))[0] if opts.use_original_name_batch and name is not None else ''
+        if output_exists(basename):
+            continue
 
         if isinstance(image_placeholder, str):
             try:
@@ -80,7 +92,6 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
             suffix = pp.get_suffix(used_suffixes)
 
             if opts.use_original_name_batch and name is not None:
-                basename = os.path.splitext(os.path.basename(name))[0]
                 forced_filename = basename + suffix
             else:
                 basename = ''
@@ -95,7 +106,9 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
             shared.state.assign_current_image(pp.image)
 
             if save_output:
-                output_format = save_format or opts.samples_format
+                if forced_filename is not None and output_exists(basename, suffix):
+                    continue
+
                 output_jpeg_quality = jpeg_quality if output_format.lower() in ("jpg", "jpeg") else None
 
                 fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=output_format, info=infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
@@ -132,8 +145,8 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
     return outputs, ui_common.plaintext_to_html(infotext), ''
 
 
-def run_postprocessing_webui(id_task, extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, save_format, jpeg_quality, *args, **kwargs):
-    return run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_format=save_format, jpeg_quality=jpeg_quality, **kwargs)
+def run_postprocessing_webui(id_task, extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, save_format, jpeg_quality, skip_existing_files=True, *args, **kwargs):
+    return run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_format=save_format, jpeg_quality=jpeg_quality, skip_existing_files=skip_existing_files, **kwargs)
 
 
 def run_extras(extras_mode, resize_mode, image, image_folder, input_dir, output_dir, show_extras_results, gfpgan_visibility, codeformer_visibility, codeformer_weight, upscaling_resize, upscaling_resize_w, upscaling_resize_h, upscaling_crop, extras_upscaler_1, extras_upscaler_2, extras_upscaler_2_visibility, upscale_first: bool, save_output: bool = True, max_side_length: int = 0):

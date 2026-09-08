@@ -25,6 +25,7 @@ def create_ui():
             with gr.Row():
                 extras_save_format = gr.Radio(label="Save format", choices=["jpg", "png", "webp"], value="jpg", elem_id="extras_save_format")
                 extras_jpeg_quality = gr.Slider(minimum=1, maximum=100, step=1, label="JPG quality", value=90, elem_id="extras_jpeg_quality")
+                extras_skip_existing_files = gr.Checkbox(label="Skip existing files", value=True, elem_id="extras_skip_existing_files")
 
             script_inputs = scripts.scripts_postproc.setup_ui()
 
@@ -52,6 +53,7 @@ def create_ui():
             show_extras_results,
             extras_save_format,
             extras_jpeg_quality,
+            extras_skip_existing_files,
             *script_inputs
         ],
         outputs=[
