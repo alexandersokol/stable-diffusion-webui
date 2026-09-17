@@ -135,3 +135,30 @@ def test_postprocessing_saves_existing_batch_output_when_skip_disabled(monkeypat
     assert len(outputs) == 1
     assert len(script_calls) == 1
     assert len(save_calls) == 1
+
+
+def test_postprocessing_combines_original_parameters_with_extras_info_for_jpeg(monkeypatch, tmp_path):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+
+    original_parameters = "a cat\nNegative prompt: blurry\nSteps: 20, Seed: 123"
+
+    def add_upscaler_info(pp, args):
+        pp.info["Postprocess upscaler"] = "ESRGAN"
+
+    saved = {}
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=add_upscaler_info)
+    monkeypatch.setattr(postprocessing.images, "read_info_from_image", lambda image: (original_parameters, {}))
+    monkeypatch.setattr(postprocessing.images, "save_image", lambda *args, **kwargs: (saved.update(kwargs) or (str(output_dir / "source.jpg"), None)))
+
+    postprocessing.run_postprocessing(
+        0,
+        Image.new("RGB", (1, 1), "red"),
+        [],
+        "",
+        "",
+        True,
+        save_format="jpg",
+    )
+
+    assert saved["info"] == f"{original_parameters}\nPostprocess upscaler: ESRGAN"

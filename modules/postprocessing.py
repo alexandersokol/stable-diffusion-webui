@@ -6,6 +6,13 @@ from modules import shared, images, devices, scripts, scripts_postprocessing, ui
 from modules.shared import opts
 
 
+def combine_original_and_postprocessing_info(original_info, postprocessing_info):
+    if original_info and postprocessing_info:
+        return f"{original_info}\n{postprocessing_info}"
+
+    return original_info or postprocessing_info
+
+
 def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True, save_format=None, jpeg_quality=None, skip_existing_files: bool = False):
     devices.torch_gc()
 
@@ -44,6 +51,7 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
     data_to_process = list(get_images(extras_mode, image, image_folder, input_dir))
     shared.state.job_count = len(data_to_process)
     output_format = save_format or opts.samples_format
+    output_format_lower = output_format.lower()
 
     def output_exists(basename, suffix=""):
         if not skip_existing_files or not save_output or not basename:
@@ -109,9 +117,10 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
                 if forced_filename is not None and output_exists(basename, suffix):
                     continue
 
-                output_jpeg_quality = jpeg_quality if output_format.lower() in ("jpg", "jpeg") else None
+                save_infotext = infotext if output_format_lower == "png" else combine_original_and_postprocessing_info(parameters, infotext)
+                output_jpeg_quality = jpeg_quality if output_format_lower in ("jpg", "jpeg") else None
 
-                fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=output_format, info=infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
+                fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=output_format, info=save_infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
 
                 if pp.caption:
                     caption_filename = os.path.splitext(fullfn)[0] + ".txt"
