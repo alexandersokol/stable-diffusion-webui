@@ -1,5 +1,7 @@
 import sys
 import contextlib
+import ctypes
+import gc
 import time
 from functools import lru_cache
 
@@ -166,6 +168,27 @@ def torch_gc(force=False, collect_ipc=False):
         torch_npu_set_device()
         npu_specific.torch_npu_gc()
         record_torch_gc_run("npu", now=now)
+
+
+def malloc_trim():
+    if sys.platform != "linux":
+        return False
+
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        return libc.malloc_trim(0) == 1
+    except Exception:
+        return False
+
+
+def cpu_gc(force=False):
+    if not force and not getattr(shared.opts, "cpu_gc_after_generation", False):
+        return
+
+    gc.collect()
+
+    if getattr(shared.opts, "cpu_gc_malloc_trim", True):
+        malloc_trim()
 
 
 def torch_npu_set_device():

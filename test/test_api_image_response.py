@@ -77,6 +77,29 @@ def test_encode_processed_images_for_api_file_mode_returns_existing_paths_withou
     assert image_paths == [saved_path]
 
 
+def test_encode_processed_images_for_api_file_mode_accepts_placeholder_path(tmp_path):
+    saved_path = str(tmp_path / "saved.png")
+    image = Image.new("RGB", (1, 1), "black")
+    image.already_saved_as = saved_path
+    processed = make_processed([image])
+
+    encoded_images, image_paths = image_response.encode_processed_images_for_api(
+        processed,
+        True,
+        "file",
+        "samples",
+        "grids",
+        lambda image: (_ for _ in ()).throw(AssertionError("base64 encoder should not be called")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("save_image should not be called")),
+        "png",
+        "png",
+        False,
+    )
+
+    assert encoded_images == []
+    assert image_paths == [saved_path]
+
+
 def test_encode_processed_images_for_api_file_mode_saves_unsaved_images(tmp_path):
     saved_path = str(tmp_path / "fallback.png")
 

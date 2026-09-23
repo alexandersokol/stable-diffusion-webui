@@ -1194,8 +1194,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 infotexts.append(text)
                 if opts.enable_pnginfo:
                     image.info["parameters"] = text
-                output_images.append(image)
-                output_image_paths.append(saved_image_path)
+                processing_output.append_image_result(output_images, output_image_paths, p, opts, image, saved_image_path)
 
                 if mask_for_overlay is not None:
                     if opts.return_mask or opts.save_mask:
@@ -1204,8 +1203,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         if save_samples and opts.save_mask:
                             saved_mask_path, _ = save_image_timed(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
                         if opts.return_mask:
-                            output_images.append(image_mask)
-                            output_image_paths.append(saved_mask_path)
+                            processing_output.append_image_result(output_images, output_image_paths, p, opts, image_mask, saved_mask_path)
 
                     if opts.return_mask_composite or opts.save_mask_composite:
                         image_mask_composite = Image.composite(original_denoised_image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
@@ -1213,8 +1211,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                         if save_samples and opts.save_mask_composite:
                             saved_mask_composite_path, _ = save_image_timed(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
                         if opts.return_mask_composite:
-                            output_images.append(image_mask_composite)
-                            output_image_paths.append(saved_mask_composite_path)
+                            processing_output.append_image_result(output_images, output_image_paths, p, opts, image_mask_composite, saved_mask_composite_path)
 
                 set_console_generation_stage("DONE")
 
@@ -1265,7 +1262,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.postprocess(p, res)
 
-    processing_output.replace_saved_images_with_placeholders(p, res, output_image_paths)
+    processing_output.replace_saved_images_with_placeholders(p, opts, res, output_image_paths)
     set_console_generation_stage("DONE")
 
     return res
