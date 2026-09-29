@@ -255,6 +255,26 @@ Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 965400086, Size: 512x512, Model
     if len(re_param.findall(lastline)) < 3:
         lines.append(lastline)
         lastline = ''
+    elif "Negative prompt:" in lastline:
+        negative_prompt_index = lastline.find("Negative prompt:")
+        search_start = negative_prompt_index + len("Negative prompt:")
+        params_start = None
+
+        for match in re_param.finditer(lastline):
+            if match.start() < search_start:
+                continue
+
+            params_start = match.start()
+            break
+
+        if params_start is not None:
+            prompt_text = lastline[:negative_prompt_index].rstrip(" ,")
+            negative_prompt_text = lastline[negative_prompt_index:params_start].rstrip(" ,")
+
+            if prompt_text:
+                lines.append(prompt_text)
+            lines.append(negative_prompt_text)
+            lastline = lastline[params_start:].lstrip(" ,")
 
     for line in lines:
         line = line.strip()
