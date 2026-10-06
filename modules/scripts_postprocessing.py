@@ -20,6 +20,7 @@ class PostprocessedImage:
         self.nametags = []
         self.disable_processing = False
         self.caption = None
+        self.output_extension = None
 
     def get_suffix(self, used_suffixes=None):
         used_suffixes = {} if used_suffixes is None else used_suffixes
@@ -46,6 +47,7 @@ class PostprocessedImage:
         pp.nametags = self.nametags.copy()
         pp.info = self.info.copy()
         pp.disable_processing = disable_processing
+        pp.output_extension = self.output_extension
 
         if nametags is not None:
             pp.nametags += nametags
@@ -61,6 +63,9 @@ class ScriptPostprocessing:
 
     order = 1000
     """scripts will be ordred by this value in postprocessing UI"""
+
+    terminal = False
+    """terminal scripts always run after non-terminal scripts"""
 
     name = None
     """this function should return the title of the script."""
@@ -96,6 +101,11 @@ class ScriptPostprocessing:
 
     def image_changed(self):
         pass
+
+    def output_extension(self, default_extension, **args):
+        """Return the output extension required by this script for the supplied arguments."""
+
+        return default_extension
 
 
 def wrap_call(func, filename, funcname, *args, default=None, **kwargs):
@@ -153,7 +163,7 @@ class ScriptPostprocessingRunner:
             return len(self.scripts)
 
         filtered_scripts = [script for script in self.scripts if script.name not in scripts_filter_out]
-        script_scores = {script.name: (script_score(script.name), script.order, script.name, original_index) for original_index, script in enumerate(filtered_scripts)}
+        script_scores = {script.name: (script.terminal, script_score(script.name), script.order, script.name, original_index) for original_index, script in enumerate(filtered_scripts)}
 
         return sorted(filtered_scripts, key=lambda x: script_scores[x.name])
 
@@ -169,7 +179,7 @@ class ScriptPostprocessingRunner:
         self.ui_created = True
         return inputs
 
-    def run(self, pp: PostprocessedImage, args):
+    def _scripts_with_args(self, args):
         scripts = []
 
         for script in self.scripts_in_preferred_order():
@@ -180,6 +190,18 @@ class ScriptPostprocessingRunner:
                 process_args[name] = value
 
             scripts.append((script, process_args))
+
+        return scripts
+
+    def output_extension(self, args, default_extension):
+        extension = default_extension
+        for script, process_args in self._scripts_with_args(args):
+            extension = script.output_extension(extension, **process_args)
+
+        return extension
+
+    def run(self, pp: PostprocessedImage, args):
+        scripts = self._scripts_with_args(args)
 
         for script, process_args in scripts:
             script.process_firstpass(pp, **process_args)
