@@ -3,6 +3,10 @@ from types import SimpleNamespace
 import requests
 from PIL import Image
 
+from modules import initialize
+
+initialize.imports()
+
 from modules import postprocessing
 
 
@@ -61,7 +65,7 @@ class ExtrasTestState:
         self.current_image = image
 
 
-def setup_postprocessing_unit_test(monkeypatch, tmp_path, *, script_run):
+def setup_postprocessing_unit_test(monkeypatch, tmp_path, *, script_run, output_extension=None):
     opts = SimpleNamespace(
         enable_pnginfo=False,
         outdir_extras_samples=str(tmp_path / "outputs"),
@@ -76,7 +80,14 @@ def setup_postprocessing_unit_test(monkeypatch, tmp_path, *, script_run):
     monkeypatch.setattr(postprocessing, "opts", opts)
     monkeypatch.setattr(postprocessing.shared, "state", ExtrasTestState())
     monkeypatch.setattr(postprocessing.images, "read_info_from_image", lambda image: ("", {}))
-    monkeypatch.setattr(postprocessing.scripts, "scripts_postproc", SimpleNamespace(run=script_run))
+    monkeypatch.setattr(
+        postprocessing.scripts,
+        "scripts_postproc",
+        SimpleNamespace(
+            run=script_run,
+            output_extension=output_extension or (lambda args, default_extension: default_extension),
+        ),
+    )
 
 
 def test_postprocessing_skips_existing_batch_output_when_enabled(monkeypatch, tmp_path):
@@ -162,3 +173,109 @@ def test_postprocessing_combines_original_parameters_with_extras_info_for_jpeg(m
     )
 
     assert saved["info"] == f"{original_parameters}\nPostprocess upscaler: ESRGAN"
+
+
+def test_postprocessing_uses_preflight_png_for_skip_and_save(monkeypatch, tmp_path):
+    input_file = tmp_path / "source.png"
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    Image.new("RGB", (1, 1), "red").save(input_file)
+    (output_dir / "source.jpg").write_bytes(b"unrelated existing jpg")
+
+    script_calls = []
+    save_calls = []
+    setup_postprocessing_unit_test(
+        monkeypatch,
+        tmp_path,
+        script_run=lambda pp, args: script_calls.append(pp),
+        output_extension=lambda args, default_extension: "png",
+    )
+    monkeypatch.setattr(
+        postprocessing.images,
+        "save_image",
+        lambda *args, **kwargs: (save_calls.append(kwargs) or (str(output_dir / "source.png"), None)),
+    )
+
+    postprocessing.run_postprocessing(
+        1,
+        None,
+        [SimpleNamespace(name=str(input_file), orig_name="source.png")],
+        "",
+        "",
+        True,
+        save_format="jpg",
+        jpeg_quality=75,
+        skip_existing_files=True,
+    )
+
+    assert len(script_calls) == 1
+    assert len(save_calls) == 1
+    assert save_calls[0]["extension"] == "png"
+    assert save_calls[0]["jpeg_quality"] is None
+
+
+def test_postprocessing_skips_existing_effective_png_before_scripts(monkeypatch, tmp_path):
+    input_file = tmp_path / "source.png"
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    Image.new("RGB", (1, 1), "red").save(input_file)
+    (output_dir / "source.png").write_bytes(b"already removed")
+
+    script_calls = []
+    setup_postprocessing_unit_test(
+        monkeypatch,
+        tmp_path,
+        script_run=lambda pp, args: script_calls.append(pp),
+        output_extension=lambda args, default_extension: "png",
+    )
+    save_calls = []
+    monkeypatch.setattr(postprocessing.images, "save_image", lambda *args, **kwargs: save_calls.append(kwargs))
+
+    outputs, _html_info, _html_log = postprocessing.run_postprocessing(
+        1,
+        None,
+        [SimpleNamespace(name=str(input_file), orig_name="source.png")],
+        "",
+        "",
+        True,
+        save_format="webp",
+        skip_existing_files=True,
+    )
+
+    assert outputs == []
+    assert script_calls == []
+    assert save_calls == []
+
+
+def test_postprocessing_honors_per_image_extension_for_extra_image_suffix(monkeypatch, tmp_path):
+    input_file = tmp_path / "source.png"
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    Image.new("RGB", (1, 1), "red").save(input_file)
+    (output_dir / "source-alpha.png").write_bytes(b"existing transparent extra")
+
+    def add_extra(pp, args):
+        extra = pp.create_copy(Image.new("RGBA", (1, 1)), nametags=["alpha"])
+        extra.output_extension = "png"
+        pp.extra_images.append(extra)
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=add_extra)
+    save_calls = []
+    monkeypatch.setattr(
+        postprocessing.images,
+        "save_image",
+        lambda *args, **kwargs: (save_calls.append(kwargs) or (str(output_dir / "source.jpg"), None)),
+    )
+
+    postprocessing.run_postprocessing(
+        1,
+        None,
+        [SimpleNamespace(name=str(input_file), orig_name="source.png")],
+        "",
+        "",
+        True,
+        save_format="jpg",
+        skip_existing_files=True,
+    )
+
+    assert [call["extension"] for call in save_calls] == ["jpg"]

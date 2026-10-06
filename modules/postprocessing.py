@@ -50,14 +50,14 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
 
     data_to_process = list(get_images(extras_mode, image, image_folder, input_dir))
     shared.state.job_count = len(data_to_process)
-    output_format = save_format or opts.samples_format
-    output_format_lower = output_format.lower()
+    requested_format = save_format or opts.samples_format
+    output_format = scripts.scripts_postproc.output_extension(args, requested_format)
 
-    def output_exists(basename, suffix=""):
+    def output_exists(basename, suffix="", extension=None):
         if not skip_existing_files or not save_output or not basename:
             return False
 
-        filename = f"{basename}{suffix}.{output_format}"
+        filename = f"{basename}{suffix}.{extension or output_format}"
         return os.path.exists(os.path.join(outpath, filename))
 
     for image_placeholder, name in data_to_process:
@@ -98,6 +98,8 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
         used_suffixes = {}
         for pp in [initial_pp, *initial_pp.extra_images]:
             suffix = pp.get_suffix(used_suffixes)
+            pp_output_format = pp.output_extension or output_format
+            pp_output_format_lower = pp_output_format.lower()
 
             if opts.use_original_name_batch and name is not None:
                 forced_filename = basename + suffix
@@ -114,13 +116,13 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
             shared.state.assign_current_image(pp.image)
 
             if save_output:
-                if forced_filename is not None and output_exists(basename, suffix):
+                if forced_filename is not None and output_exists(basename, suffix, pp_output_format):
                     continue
 
-                save_infotext = infotext if output_format_lower == "png" else combine_original_and_postprocessing_info(parameters, infotext)
-                output_jpeg_quality = jpeg_quality if output_format_lower in ("jpg", "jpeg") else None
+                save_infotext = infotext if pp_output_format_lower == "png" else combine_original_and_postprocessing_info(parameters, infotext)
+                output_jpeg_quality = jpeg_quality if pp_output_format_lower in ("jpg", "jpeg") else None
 
-                fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=output_format, info=save_infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
+                fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=pp_output_format, info=save_infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
 
                 if pp.caption:
                     caption_filename = os.path.splitext(fullfn)[0] + ".txt"
