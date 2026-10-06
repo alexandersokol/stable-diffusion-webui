@@ -30,6 +30,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
     - ESRGAN, neural network upscaler with a lot of third party models
     - SwinIR and Swin2SR ([see here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/2092)), neural network upscalers
     - LDSR, Latent diffusion super resolution upscaling
+    - [Background removal](docs/background-removal.md) with locally installed ONNX models
 - Resizing aspect ratio options
 - Sampling method selection
     - Adjust sampler eta values (noise multiplier)
