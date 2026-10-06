@@ -160,7 +160,7 @@ def run_postprocessing_webui(id_task, extras_mode, image, image_folder, input_di
     return run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_format=save_format, jpeg_quality=jpeg_quality, skip_existing_files=skip_existing_files, **kwargs)
 
 
-def run_extras(extras_mode, resize_mode, image, image_folder, input_dir, output_dir, show_extras_results, gfpgan_visibility, codeformer_visibility, codeformer_weight, upscaling_resize, upscaling_resize_w, upscaling_resize_h, upscaling_crop, extras_upscaler_1, extras_upscaler_2, extras_upscaler_2_visibility, upscale_first: bool, save_output: bool = True, max_side_length: int = 0):
+def run_extras(extras_mode, resize_mode, image, image_folder, input_dir, output_dir, show_extras_results, gfpgan_visibility, codeformer_visibility, codeformer_weight, upscaling_resize, upscaling_resize_w, upscaling_resize_h, upscaling_crop, extras_upscaler_1, extras_upscaler_2, extras_upscaler_2_visibility, upscale_first: bool, save_output: bool = True, max_side_length: int = 0, background_removal_enabled: bool = False, background_removal_model: str = None):
     """old handler for API"""
 
     args = scripts.scripts_postproc.create_args_for_run({
@@ -184,6 +184,10 @@ def run_extras(extras_mode, resize_mode, image, image_folder, input_dir, output_
             "enable": True,
             "codeformer_visibility": codeformer_visibility,
             "codeformer_weight": codeformer_weight,
+        },
+        "Background Removal": {
+            "enabled": background_removal_enabled,
+            "model_name": background_removal_model,
         },
     })
 

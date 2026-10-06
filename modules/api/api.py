@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from secrets import compare_digest
 
 import modules.shared as shared
-from modules import sd_samplers, deepbooru, sd_hijack, images, scripts, ui, postprocessing, errors, restart, shared_items, script_callbacks, infotext_utils, sd_models, sd_schedulers
+from modules import background_removal, sd_samplers, deepbooru, sd_hijack, images, scripts, ui, postprocessing, errors, restart, shared_items, script_callbacks, infotext_utils, sd_models, sd_schedulers
 from modules.api import image_response, image_inputs, models
 from modules.shared import opts
 from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
@@ -120,11 +120,12 @@ def decode_image_list_to_images(image_list):
     return [decode_base64_to_image(x.data, budget=budget) for x in image_list]
 
 
-def encode_pil_to_base64(image):
+def encode_pil_to_base64(image, output_format=None):
     with io.BytesIO() as output_bytes:
         if isinstance(image, str):
             return image
-        if opts.samples_format.lower() == 'png':
+        effective_format = (output_format or opts.samples_format).lower()
+        if effective_format == 'png':
             use_metadata = False
             metadata = PngImagePlugin.PngInfo()
             for key, value in image.info.items():
@@ -133,14 +134,14 @@ def encode_pil_to_base64(image):
                     use_metadata = True
             image.save(output_bytes, format="PNG", pnginfo=(metadata if use_metadata else None), quality=opts.jpeg_quality)
 
-        elif opts.samples_format.lower() in ("jpg", "jpeg", "webp"):
+        elif effective_format in ("jpg", "jpeg", "webp"):
             if image.mode in ("RGBA", "P"):
                 image = image.convert("RGB")
             parameters = image.info.get('parameters', None)
             exif_bytes = piexif.dump({
                 "Exif": { piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(parameters or "", encoding="unicode") }
             })
-            if opts.samples_format.lower() in ("jpg", "jpeg"):
+            if effective_format in ("jpg", "jpeg"):
                 image.save(output_bytes, format="JPEG", exif = exif_bytes, quality=opts.jpeg_quality)
             else:
                 image.save(output_bytes, format="WEBP", exif = exif_bytes, quality=opts.jpeg_quality)
@@ -615,24 +616,32 @@ class Api:
 
     def extras_single_image_api(self, req: models.ExtrasSingleImageRequest):
         reqDict = setUpscalers(req)
+        output_format = "png" if reqDict.get("background_removal_enabled") else None
 
         reqDict['image'] = decode_base64_to_image(reqDict['image'])
 
-        with self.queue_lock:
-            result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", save_output=False, **reqDict)
+        try:
+            with self.queue_lock:
+                result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", save_output=False, **reqDict)
+        except background_removal.BackgroundRemovalError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        return models.ExtrasSingleImageResponse(image=encode_pil_to_base64(result[0][0]), html_info=result[1])
+        return models.ExtrasSingleImageResponse(image=encode_pil_to_base64(result[0][0], output_format), html_info=result[1])
 
     def extras_batch_images_api(self, req: models.ExtrasBatchImagesRequest):
         reqDict = setUpscalers(req)
+        output_format = "png" if reqDict.get("background_removal_enabled") else None
 
         image_list = reqDict.pop('imageList', [])
         image_folder = decode_image_list_to_images(image_list)
 
-        with self.queue_lock:
-            result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
+        try:
+            with self.queue_lock:
+                result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
+        except background_removal.BackgroundRemovalError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        return models.ExtrasBatchImagesResponse(images=list(map(encode_pil_to_base64, result[0])), html_info=result[1])
+        return models.ExtrasBatchImagesResponse(images=[encode_pil_to_base64(image, output_format) for image in result[0]], html_info=result[1])
 
     def pnginfoapi(self, req: models.PNGInfoRequest):
         image = decode_base64_to_image(req.image.strip())

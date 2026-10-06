@@ -159,6 +159,8 @@ class ExtrasBaseRequest(BaseModel):
     upscaler_2: str = Field(default="None", title="Secondary upscaler", description=f"The name of the secondary upscaler to use, it has to be one of this list: {' , '.join([x.name for x in sd_upscalers])}")
     extras_upscaler_2_visibility: float = Field(default=0, title="Secondary upscaler visibility", ge=0, le=1, allow_inf_nan=False, description="Sets the visibility of secondary upscaler, values should be between 0 and 1.")
     upscale_first: bool = Field(default=False, title="Upscale first", description="Should the upscaler run before restoring faces?")
+    background_removal_enabled: bool = Field(default=False, title="Background removal enabled", description="Run an installed background-removal model after all other Extras operations.")
+    background_removal_model: Optional[str] = Field(default=None, title="Background removal model", description="Display name of an installed background-removal model.")
 
 class ExtraBaseResponse(BaseModel):
     html_info: str = Field(title="HTML info", description="A series of HTML tags containing the process info.")
