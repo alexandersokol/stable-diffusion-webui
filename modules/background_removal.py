@@ -42,6 +42,7 @@ class ModelSpec:
     resize_mode: str
     normalization: str
     activation: str
+    channel_order: str = "rgb"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,7 +69,7 @@ MODEL_SPECS = (
     ModelSpec("BiRefNet Portrait", "BiRefNet-portrait.onnx", "birefnet", (1024, 1024), "input_image", "output_image", "stretch", "imagenet", "sigmoid_minmax"),
     ModelSpec("DeepLabV3 MobileViT Small", "deeplabv3-mobilevit-small.onnx", "deeplab_single_mask", (1024, 1024), "input", "output", "stretch", "imagenet", "alpha"),
     ModelSpec("ISNet Anime", "isnet-anime.onnx", "isnet_anime", (1024, 1024), "img", "mask", "letterbox", "zero_to_one", "minmax"),
-    ModelSpec("RMBG 1.4", "RMBG-1.4.onnx", "rmbg_1_4", (1024, 1024), "pixel_values", "logits", "stretch", "imagenet", "sigmoid_minmax"),
+    ModelSpec("RMBG 1.4", "RMBG-1.4.onnx", "deeplab_multiclass", (512, 512), "pixel_values", "logits", "stretch", "zero_to_one", "softmax_foreground", "bgr"),
     ModelSpec("RMBG 2.0", "RMBG-2.0.onnx", "rmbg_2_0", (1024, 1024), "pixel_values", "alphas", "stretch", "imagenet", "alpha"),
     ModelSpec("Silueta", "silueta.onnx", "u2net", (320, 320), "input.1", "1959", "stretch", "imagenet", "minmax"),
     ModelSpec("U2Net Human Segmentation", "u2net_human_seg.onnx", "u2net", (320, 320), "input.1", "1959", "stretch", "imagenet", "minmax"),
@@ -132,6 +133,11 @@ def prepare_input(image: Image.Image, spec: ModelSpec) -> PreparedInput:
         raise ModelContractError(f"{spec.display_name} has unsupported resize mode {spec.resize_mode!r}")
 
     array = np.asarray(resized, dtype=np.float32) / np.float32(255.0)
+    if spec.channel_order == "bgr":
+        array = array[:, :, ::-1]
+    elif spec.channel_order != "rgb":
+        raise ModelContractError(f"{spec.display_name} has unsupported channel order {spec.channel_order!r}")
+
     if spec.normalization == "imagenet":
         array = (array - IMAGENET_MEAN) / IMAGENET_STD
     elif spec.normalization != "zero_to_one":
@@ -184,6 +190,21 @@ def _activate_mask(mask: np.ndarray, spec: ModelSpec) -> np.ndarray:
     return (mask - minimum) / (maximum - minimum)
 
 
+def _multiclass_foreground(output, spec: ModelSpec) -> np.ndarray:
+    logits = np.asarray(output, dtype=np.float32)
+    if logits.ndim != 4 or logits.shape[0] != 1 or logits.shape[1] < 2:
+        raise ModelContractError(f"{spec.display_name} output must contain batched multi-class logits")
+    if logits.shape[2] < 1 or logits.shape[3] < 1:
+        raise ModelContractError(f"{spec.display_name} output logits are empty")
+    if not np.isfinite(logits).all():
+        raise ModelContractError(f"{spec.display_name} output logits must contain only finite values")
+
+    shifted = logits[0] - logits[0].max(axis=0, keepdims=True)
+    probabilities = np.exp(shifted)
+    probabilities /= probabilities.sum(axis=0, keepdims=True)
+    return 1.0 - probabilities[0]
+
+
 def reconstruct_mask(outputs: dict[str, np.ndarray], prepared: PreparedInput, spec: ModelSpec) -> Image.Image:
     if spec.output_name not in outputs:
         available = ", ".join(sorted(outputs)) or "none"
@@ -191,7 +212,10 @@ def reconstruct_mask(outputs: dict[str, np.ndarray], prepared: PreparedInput, sp
             f"{spec.display_name} did not return required output {spec.output_name!r}; available outputs: {available}"
         )
 
-    mask = _activate_mask(_single_mask(outputs[spec.output_name], spec), spec)
+    if spec.activation == "softmax_foreground":
+        mask = _multiclass_foreground(outputs[spec.output_name], spec)
+    else:
+        mask = _activate_mask(_single_mask(outputs[spec.output_name], spec), spec)
     if not np.isfinite(mask).all():
         raise ModelContractError(f"{spec.display_name} produced a non-finite mask after activation")
 
@@ -238,6 +262,13 @@ class BackgroundRemovalService:
         self._session = None
         self._session_identity = None
         self._lock = threading.RLock()
+
+    @property
+    def active_providers(self) -> tuple[str, ...]:
+        with self._lock:
+            if self._session is None:
+                return ()
+            return tuple(self._session.get_providers())
 
     def _get_runtime(self):
         if self._runtime is None:

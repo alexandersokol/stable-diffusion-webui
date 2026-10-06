@@ -46,6 +46,11 @@ def test_registry_records_architecture_contracts():
     assert specs["BEN2_Base.onnx"].normalization == "zero_to_one"
     assert specs["BEN2_ONNX.onnx"].normalization == "imagenet"
     assert specs["BiRefNet-general.onnx"].activation == "sigmoid_minmax"
+    assert specs["RMBG-1.4.onnx"].adapter == "deeplab_multiclass"
+    assert specs["RMBG-1.4.onnx"].input_size == (512, 512)
+    assert specs["RMBG-1.4.onnx"].normalization == "zero_to_one"
+    assert specs["RMBG-1.4.onnx"].channel_order == "bgr"
+    assert specs["RMBG-1.4.onnx"].activation == "softmax_foreground"
     assert specs["RMBG-2.0.onnx"].output_name == "alphas"
     assert specs["silueta.onnx"].input_size == (320, 320)
     assert specs["u2net_human_seg.onnx"].input_size == (320, 320)
@@ -147,6 +152,15 @@ def test_prepare_input_applies_imagenet_normalization():
     np.testing.assert_allclose(prepared.tensor[0, :, 0, 0], expected, rtol=1e-6)
 
 
+def test_prepare_input_can_reverse_rgb_to_bgr_channels():
+    image = Image.new("RGB", (1, 1), (10, 20, 30))
+    spec = adapter_spec(input_size=(1, 1), channel_order="bgr")
+
+    prepared = background_removal.prepare_input(image, spec)
+
+    np.testing.assert_allclose(prepared.tensor[0, :, 0, 0], [30 / 255, 20 / 255, 10 / 255])
+
+
 def test_letterbox_mask_reconstruction_removes_padding():
     image = Image.new("RGB", (4, 2), "white")
     spec = adapter_spec(input_size=(8, 8), resize_mode="letterbox")
@@ -189,6 +203,16 @@ def test_mask_reconstruction_applies_sigmoid_and_minmax():
     assert values[0] == 0
     assert values[2] == 255
     assert values[0] < values[1] < values[3] < values[2]
+
+
+def test_mask_reconstruction_converts_multiclass_logits_to_foreground_probability():
+    spec = adapter_spec(input_size=(2, 1), activation="softmax_foreground")
+    prepared = background_removal.prepare_input(Image.new("RGB", (2, 1)), spec)
+    logits = np.array([[[[2.0, 0.0]], [[0.0, 2.0]]]], dtype=np.float32)
+
+    mask = background_removal.reconstruct_mask({"output": logits}, prepared, spec)
+
+    assert list(mask.getdata()) == [30, 225]
 
 
 @pytest.mark.parametrize(
@@ -355,6 +379,19 @@ def test_runtime_lock_prevents_duplicate_session_creation(tmp_path):
 
     assert len(runtime.sessions) == 1
     assert all(result.mode == "RGBA" for result in results)
+
+
+def test_runtime_reports_active_providers_and_clears_them_on_unload(tmp_path):
+    model = installed_test_model(tmp_path)
+    runtime = FakeRuntime(model.spec)
+    service = background_removal.BackgroundRemovalService(runtime_loader=lambda: runtime)
+
+    assert service.active_providers == ()
+    service.remove_background(Image.new("RGB", (2, 2)), model)
+    assert service.active_providers == ("CPUExecutionProvider",)
+
+    service.unload()
+    assert service.active_providers == ()
 
 
 @pytest.mark.parametrize(
