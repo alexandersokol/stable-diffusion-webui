@@ -1,6 +1,10 @@
 import dataclasses
 import logging
 
+import numpy as np
+import pytest
+from PIL import Image
+
 from modules import background_removal
 
 
@@ -90,3 +94,125 @@ def test_discovery_selects_a_deterministic_duplicate_and_warns(tmp_path, caplog)
     assert installed["RMBG 1.4"].path == expected.resolve()
     assert "RMBG-1.4.onnx" in caplog.text
     assert str(expected.resolve()) in caplog.text
+
+
+def adapter_spec(**overrides):
+    values = {
+        "display_name": "Test model",
+        "filename": "test.onnx",
+        "adapter": "test",
+        "input_size": (2, 2),
+        "input_name": "input",
+        "output_name": "output",
+        "resize_mode": "stretch",
+        "normalization": "zero_to_one",
+        "activation": "alpha",
+    }
+    values.update(overrides)
+    return background_removal.ModelSpec(**values)
+
+
+def test_prepare_input_converts_rgb_to_nchw_float32_zero_to_one():
+    image = Image.new("RGB", (2, 2))
+    image.putdata([
+        (0, 127, 255),
+        (255, 0, 127),
+        (127, 255, 0),
+        (64, 128, 192),
+    ])
+
+    prepared = background_removal.prepare_input(image, adapter_spec())
+
+    assert prepared.tensor.shape == (1, 3, 2, 2)
+    assert prepared.tensor.dtype == np.float32
+    np.testing.assert_allclose(prepared.tensor[0, :, 0, 0], [0.0, 127 / 255, 1.0])
+    assert prepared.source_size == (2, 2)
+    assert prepared.content_box == (0, 0, 2, 2)
+
+
+def test_prepare_input_applies_imagenet_normalization():
+    image = Image.new("RGB", (1, 1), (255, 128, 0))
+    spec = adapter_spec(input_size=(1, 1), normalization="imagenet")
+
+    prepared = background_removal.prepare_input(image, spec)
+
+    expected = [
+        (1.0 - 0.485) / 0.229,
+        ((128 / 255) - 0.456) / 0.224,
+        (0.0 - 0.406) / 0.225,
+    ]
+    np.testing.assert_allclose(prepared.tensor[0, :, 0, 0], expected, rtol=1e-6)
+
+
+def test_letterbox_mask_reconstruction_removes_padding():
+    image = Image.new("RGB", (4, 2), "white")
+    spec = adapter_spec(input_size=(8, 8), resize_mode="letterbox")
+    prepared = background_removal.prepare_input(image, spec)
+    output = np.zeros((1, 1, 8, 8), dtype=np.float32)
+    output[:, :, 2:6, :] = 1.0
+
+    mask = background_removal.reconstruct_mask({"output": output}, prepared, spec)
+
+    assert prepared.content_box == (0, 2, 8, 6)
+    assert mask.mode == "L"
+    assert mask.size == (4, 2)
+    assert set(mask.getdata()) == {255}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        np.array([[[[0.0, 1.0], [0.5, 0.25]]]], dtype=np.float32),
+        np.array([[[0.0, 1.0], [0.5, 0.25]]], dtype=np.float32),
+        np.array([[0.0, 1.0], [0.5, 0.25]], dtype=np.float32),
+    ],
+)
+def test_mask_reconstruction_accepts_single_mask_shapes(output):
+    prepared = background_removal.prepare_input(Image.new("RGB", (2, 2)), adapter_spec())
+
+    mask = background_removal.reconstruct_mask({"output": output}, prepared, adapter_spec())
+
+    assert list(mask.getdata()) == [0, 255, 128, 64]
+
+
+def test_mask_reconstruction_applies_sigmoid_and_minmax():
+    spec = adapter_spec(activation="sigmoid_minmax")
+    prepared = background_removal.prepare_input(Image.new("RGB", (2, 2)), spec)
+    logits = np.array([[-2.0, 0.0], [2.0, 1.0]], dtype=np.float32)
+
+    mask = background_removal.reconstruct_mask({"output": logits}, prepared, spec)
+
+    values = list(mask.getdata())
+    assert values[0] == 0
+    assert values[2] == 255
+    assert values[0] < values[1] < values[3] < values[2]
+
+
+@pytest.mark.parametrize(
+    ("outputs", "activation", "message"),
+    [
+        ({"wrong": np.zeros((1, 1, 2, 2), dtype=np.float32)}, "alpha", "output"),
+        ({"output": np.zeros((1, 2, 2, 2), dtype=np.float32)}, "alpha", "single foreground mask"),
+        ({"output": np.array([[0.0, np.nan], [0.5, 1.0]], dtype=np.float32)}, "alpha", "finite"),
+        ({"output": np.array([[0.0, np.inf], [0.5, 1.0]], dtype=np.float32)}, "alpha", "finite"),
+        ({"output": np.ones((2, 2), dtype=np.float32)}, "minmax", "constant"),
+    ],
+)
+def test_mask_reconstruction_rejects_invalid_outputs(outputs, activation, message):
+    spec = adapter_spec(activation=activation)
+    prepared = background_removal.prepare_input(Image.new("RGB", (2, 2)), spec)
+
+    with pytest.raises(background_removal.ModelContractError, match=message):
+        background_removal.reconstruct_mask(outputs, prepared, spec)
+
+
+def test_compose_rgba_preserves_rgb_pixels_and_uses_mask_as_alpha():
+    image = Image.new("RGB", (2, 1))
+    image.putdata([(10, 20, 30), (40, 50, 60)])
+    mask = Image.new("L", (2, 1))
+    mask.putdata([0, 200])
+
+    result = background_removal.compose_rgba(image, mask)
+
+    assert result.mode == "RGBA"
+    assert list(result.getdata()) == [(10, 20, 30, 0), (40, 50, 60, 200)]
