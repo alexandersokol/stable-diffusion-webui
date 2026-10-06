@@ -1,5 +1,8 @@
 import dataclasses
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -216,3 +219,160 @@ def test_compose_rgba_preserves_rgb_pixels_and_uses_mask_as_alpha():
 
     assert result.mode == "RGBA"
     assert list(result.getdata()) == [(10, 20, 30, 0), (40, 50, 60, 200)]
+
+
+class FakeSession:
+    def __init__(self, spec, providers, output=None, input_name=None, input_shape=None, output_name=None):
+        self.spec = spec
+        self.providers = providers
+        self.output = output if output is not None else np.array([[[[0.0, 1.0], [0.25, 0.75]]]], dtype=np.float32)
+        self.input_name = input_name or spec.input_name
+        self.input_shape = input_shape or [1, 3, spec.input_size[1], spec.input_size[0]]
+        self.output_name = output_name or spec.output_name
+        self.run_count = 0
+
+    def get_inputs(self):
+        return [SimpleNamespace(name=self.input_name, shape=self.input_shape)]
+
+    def get_outputs(self):
+        return [SimpleNamespace(name=self.output_name, shape=[1, 1, self.spec.input_size[1], self.spec.input_size[0]])]
+
+    def get_providers(self):
+        return list(self.providers)
+
+    def run(self, output_names, feeds):
+        assert output_names == [self.spec.output_name]
+        assert list(feeds) == [self.spec.input_name]
+        self.run_count += 1
+        return [self.output]
+
+
+class FakeRuntime:
+    def __init__(self, spec, *, available=None, fail_accelerated=False, create_delay=0, session_options=None):
+        self.spec = spec
+        self.available = available or ["CPUExecutionProvider"]
+        self.fail_accelerated = fail_accelerated
+        self.create_delay = create_delay
+        self.session_options = session_options or {}
+        self.created_with = []
+        self.sessions = []
+
+    def get_available_providers(self):
+        return list(self.available)
+
+    def InferenceSession(self, path, providers):
+        self.created_with.append((path, list(providers)))
+        if self.create_delay:
+            time.sleep(self.create_delay)
+        if self.fail_accelerated and providers != ["CPUExecutionProvider"]:
+            raise RuntimeError("accelerator unavailable")
+        session = FakeSession(self.spec, providers, **self.session_options)
+        self.sessions.append(session)
+        return session
+
+
+def installed_test_model(tmp_path, spec=None, filename="test.onnx"):
+    spec = spec or adapter_spec(filename=filename)
+    path = tmp_path / filename
+    path.write_bytes(b"model")
+    return background_removal.InstalledModel(spec=spec, path=path)
+
+
+def test_runtime_is_loaded_lazily_and_accelerated_provider_precedes_cpu(tmp_path):
+    model = installed_test_model(tmp_path)
+    runtime = FakeRuntime(
+        model.spec,
+        available=["UnknownExecutionProvider", "CPUExecutionProvider", "CUDAExecutionProvider"],
+    )
+    load_count = 0
+
+    def load_runtime():
+        nonlocal load_count
+        load_count += 1
+        return runtime
+
+    service = background_removal.BackgroundRemovalService(runtime_loader=load_runtime)
+    assert load_count == 0
+
+    result = service.remove_background(Image.new("RGB", (2, 2), "white"), model)
+
+    assert result.mode == "RGBA"
+    assert load_count == 1
+    assert runtime.created_with == [(str(model.path.resolve()), ["CUDAExecutionProvider", "CPUExecutionProvider"])]
+
+
+def test_runtime_retries_session_creation_once_with_cpu(tmp_path, caplog):
+    model = installed_test_model(tmp_path)
+    runtime = FakeRuntime(
+        model.spec,
+        available=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        fail_accelerated=True,
+    )
+    service = background_removal.BackgroundRemovalService(runtime_loader=lambda: runtime)
+
+    with caplog.at_level(logging.WARNING, logger="modules.background_removal"):
+        result = service.remove_background(Image.new("RGB", (2, 2)), model)
+
+    assert result.mode == "RGBA"
+    assert [providers for _path, providers in runtime.created_with] == [
+        ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ["CPUExecutionProvider"],
+    ]
+    assert "retrying with CPU" in caplog.text
+
+
+def test_runtime_reuses_session_until_model_identity_changes(tmp_path):
+    first = installed_test_model(tmp_path, filename="first.onnx")
+    runtime = FakeRuntime(first.spec)
+    service = background_removal.BackgroundRemovalService(runtime_loader=lambda: runtime)
+    image = Image.new("RGB", (2, 2))
+
+    service.remove_background(image, first)
+    service.remove_background(image, first)
+    assert len(runtime.sessions) == 1
+    assert runtime.sessions[0].run_count == 2
+
+    second_spec = dataclasses.replace(first.spec, filename="second.onnx")
+    second = installed_test_model(tmp_path, spec=second_spec, filename="second.onnx")
+    service.remove_background(image, second)
+    assert len(runtime.sessions) == 2
+
+    second.path.write_bytes(b"replacement model with a different size")
+    service.remove_background(image, second)
+    assert len(runtime.sessions) == 3
+
+
+def test_runtime_lock_prevents_duplicate_session_creation(tmp_path):
+    model = installed_test_model(tmp_path)
+    runtime = FakeRuntime(model.spec, create_delay=0.02)
+    service = background_removal.BackgroundRemovalService(runtime_loader=lambda: runtime)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(
+            lambda _index: service.remove_background(Image.new("RGB", (2, 2)), model),
+            range(4),
+        ))
+
+    assert len(runtime.sessions) == 1
+    assert all(result.mode == "RGBA" for result in results)
+
+
+@pytest.mark.parametrize(
+    "session_options",
+    [
+        {"input_name": "wrong_input"},
+        {"input_shape": [1, 4, 2, 2]},
+        {"output_name": "wrong_output"},
+    ],
+)
+def test_runtime_contract_errors_identify_model_and_path(tmp_path, session_options):
+    model = installed_test_model(tmp_path)
+    runtime = FakeRuntime(model.spec, session_options=session_options)
+    service = background_removal.BackgroundRemovalService(runtime_loader=lambda: runtime)
+
+    with pytest.raises(background_removal.ModelContractError) as exc_info:
+        service.remove_background(Image.new("RGB", (2, 2)), model)
+
+    message = str(exc_info.value)
+    assert model.spec.display_name in message
+    assert str(model.path.resolve()) in message

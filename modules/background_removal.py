@@ -1,6 +1,8 @@
 import dataclasses
+import importlib
 import logging
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 IMAGENET_MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+PROVIDER_PREFERENCE = (
+    "CUDAExecutionProvider",
+    "ROCMExecutionProvider",
+    "DmlExecutionProvider",
+    "CoreMLExecutionProvider",
+    "OpenVINOExecutionProvider",
+    "CPUExecutionProvider",
+)
 
 
 class BackgroundRemovalError(RuntimeError):
@@ -210,3 +220,141 @@ def compose_rgba(image: Image.Image, mask: Image.Image) -> Image.Image:
 
     red, green, blue = rgb.split()
     return Image.merge("RGBA", (red, green, blue, mask))
+
+
+def _load_onnxruntime():
+    try:
+        return importlib.import_module("onnxruntime")
+    except ImportError as exc:
+        raise BackgroundRemovalError(
+            "Background removal requires ONNX Runtime; install exactly one compatible onnxruntime distribution"
+        ) from exc
+
+
+class BackgroundRemovalService:
+    def __init__(self, runtime_loader=None):
+        self._runtime_loader = runtime_loader or _load_onnxruntime
+        self._runtime = None
+        self._session = None
+        self._session_identity = None
+        self._lock = threading.RLock()
+
+    def _get_runtime(self):
+        if self._runtime is None:
+            self._runtime = self._runtime_loader()
+        return self._runtime
+
+    @staticmethod
+    def _providers(runtime) -> list[str]:
+        available = set(runtime.get_available_providers())
+        providers = [name for name in PROVIDER_PREFERENCE if name in available]
+        if "CPUExecutionProvider" not in providers:
+            providers.append("CPUExecutionProvider")
+        return providers
+
+    @staticmethod
+    def _model_error(model: InstalledModel, message: str) -> ModelContractError:
+        return ModelContractError(f"{model.spec.display_name} ({model.path.resolve()}): {message}")
+
+    def _validate_session(self, session, model: InstalledModel) -> None:
+        spec = model.spec
+        inputs = {value.name: value for value in session.get_inputs()}
+        if spec.input_name not in inputs:
+            raise self._model_error(model, f"required input {spec.input_name!r} is missing")
+
+        shape = list(inputs[spec.input_name].shape)
+        expected = [1, 3, spec.input_size[1], spec.input_size[0]]
+        if len(shape) != 4:
+            raise self._model_error(model, f"input shape {shape!r} is not four-dimensional NCHW")
+        for actual, wanted in zip(shape, expected):
+            if isinstance(actual, int) and actual != wanted:
+                raise self._model_error(model, f"input shape {shape!r} does not match expected {expected!r}")
+
+        output_names = {value.name for value in session.get_outputs()}
+        if spec.output_name not in output_names:
+            raise self._model_error(model, f"required output {spec.output_name!r} is missing")
+
+    def _create_session(self, runtime, model: InstalledModel, providers: list[str]):
+        path = str(model.path.resolve())
+        try:
+            session = runtime.InferenceSession(path, providers=providers)
+        except Exception as exc:
+            if providers == ["CPUExecutionProvider"]:
+                raise BackgroundRemovalError(
+                    f"Could not load {model.spec.display_name} ({path}) with CPUExecutionProvider: {exc}"
+                ) from exc
+
+            logger.warning(
+                "Could not load %s with providers %s (%s); retrying with CPU",
+                model.spec.display_name,
+                providers,
+                exc,
+            )
+            try:
+                session = runtime.InferenceSession(path, providers=["CPUExecutionProvider"])
+            except Exception as cpu_exc:
+                raise BackgroundRemovalError(
+                    f"Could not load {model.spec.display_name} ({path}) with CPUExecutionProvider: {cpu_exc}"
+                ) from cpu_exc
+
+        self._validate_session(session, model)
+        logger.info(
+            "Loaded background-removal model %s from %s with providers %s",
+            model.spec.display_name,
+            path,
+            session.get_providers(),
+        )
+        return session
+
+    def _get_session(self, model: InstalledModel):
+        path = model.path.resolve()
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise BackgroundRemovalError(f"Background-removal model {model.spec.display_name} is unavailable at {path}: {exc}") from exc
+
+        runtime = self._get_runtime()
+        providers = self._providers(runtime)
+        identity = (str(path), stat.st_size, stat.st_mtime_ns, tuple(providers))
+        if self._session is not None and self._session_identity == identity:
+            return self._session
+
+        if self._session is not None:
+            previous = self._session
+            self._session = None
+            self._session_identity = None
+            del previous
+
+        session = self._create_session(runtime, model, providers)
+        self._session = session
+        self._session_identity = identity
+        return session
+
+    def remove_background(self, image: Image.Image, model: InstalledModel) -> Image.Image:
+        prepared = prepare_input(image, model.spec)
+        with self._lock:
+            session = self._get_session(model)
+            try:
+                values = session.run([model.spec.output_name], {model.spec.input_name: prepared.tensor})
+            except Exception as exc:
+                raise BackgroundRemovalError(
+                    f"Inference failed for {model.spec.display_name} ({model.path.resolve()}): {exc}"
+                ) from exc
+
+            if len(values) != 1:
+                raise self._model_error(model, f"expected one output value, received {len(values)}")
+
+            try:
+                mask = reconstruct_mask({model.spec.output_name: values[0]}, prepared, model.spec)
+            except ModelContractError as exc:
+                raise self._model_error(model, str(exc)) from exc
+
+            return compose_rgba(image, mask)
+
+    def unload(self) -> None:
+        with self._lock:
+            if self._session is not None:
+                previous = self._session
+                self._session = None
+                self._session_identity = None
+                del previous
