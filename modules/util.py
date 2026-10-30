@@ -28,14 +28,29 @@ def html(filename):
         return ""
 
 
-def walk_files(path, allowed_extensions=None):
+def walk_files(path, allowed_extensions=None, excluded_paths=None):
     if not os.path.exists(path):
         return
 
     if allowed_extensions is not None:
         allowed_extensions = {ext.lower() for ext in allowed_extensions}
 
+    excluded_roots = {
+        os.path.normcase(os.path.realpath(excluded_path))
+        for excluded_path in (excluded_paths or [])
+    }
     visited_dirs = set()
+
+    def is_excluded(dirname):
+        canonical_path = os.path.normcase(os.path.realpath(dirname))
+        for excluded_root in excluded_roots:
+            try:
+                if os.path.commonpath((canonical_path, excluded_root)) == excluded_root:
+                    return True
+            except ValueError:
+                continue
+
+        return False
 
     def directory_key(dirname):
         try:
@@ -48,6 +63,10 @@ def walk_files(path, allowed_extensions=None):
         return "path", os.path.normcase(os.path.realpath(dirname))
 
     for root, dirs, files in os.walk(path, followlinks=True):
+        if is_excluded(root):
+            dirs[:] = []
+            continue
+
         key = directory_key(root)
         if key in visited_dirs:
             dirs[:] = []
@@ -56,7 +75,8 @@ def walk_files(path, allowed_extensions=None):
 
         dirs[:] = sorted(dirs, key=natural_sort_key)
         for dirname in list(dirs):
-            if directory_key(os.path.join(root, dirname)) in visited_dirs:
+            directory_path = os.path.join(root, dirname)
+            if is_excluded(directory_path) or directory_key(directory_path) in visited_dirs:
                 dirs.remove(dirname)
 
         if not shared.opts.list_hidden_files and ("/." in root or "\\." in root):
