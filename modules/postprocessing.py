@@ -25,6 +25,15 @@ def _is_strict_subpath(path: str, parent: str) -> bool:
         return False
 
 
+def _output_excluded_paths(input_dir: str, outpath: str):
+    canonical_input = os.path.normcase(os.path.realpath(input_dir))
+    canonical_output = os.path.normcase(os.path.realpath(outpath))
+    if canonical_input == canonical_output or _is_strict_subpath(input_dir, outpath):
+        return None
+
+    return [outpath]
+
+
 def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True, save_format=None, jpeg_quality=None, skip_existing_files: bool = False):
     devices.torch_gc()
 
@@ -51,7 +60,7 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
             assert not shared.cmd_opts.hide_ui_dir_config, '--hide-ui-dir-config option must be disabled'
             assert input_dir, 'input directory not selected'
 
-            excluded_paths = [outpath] if _is_strict_subpath(outpath, input_dir) else None
+            excluded_paths = _output_excluded_paths(input_dir, outpath)
             image_list = shared.walk_files(input_dir, excluded_paths=excluded_paths)
             for filename in image_list:
                 relative_parent = os.path.relpath(os.path.dirname(filename), input_dir)

@@ -174,6 +174,34 @@ def test_postprocessing_excludes_nested_output_directory(monkeypatch, tmp_path):
     assert sorted(path.name for path in output_dir.glob("*.png")) == ["prior.png", "source.png"]
 
 
+def test_postprocessing_excludes_nested_link_to_external_output(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_target = tmp_path / "external-output"
+    output_link = input_dir / "output"
+    source = input_dir / "source.png"
+    prior_output = output_target / "prior.png"
+    input_dir.mkdir()
+    output_target.mkdir()
+    Image.new("RGB", (1, 1), "red").save(source)
+    Image.new("RGB", (1, 1), "blue").save(prior_output)
+
+    try:
+        output_link.symlink_to(output_target, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=lambda pp, args: None)
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2, None, [], str(input_dir), str(output_link), False, save_format="png"
+    )
+
+    assert postprocessing.shared.state.job_count == 1
+    assert (output_target / "source.png").is_file()
+    assert not (output_target / "output" / "prior.png").exists()
+
+
 def test_postprocessing_processes_nested_sources_when_input_equals_output(monkeypatch, tmp_path):
     input_dir = tmp_path / "input"
     source = input_dir / "nested" / "source.png"
