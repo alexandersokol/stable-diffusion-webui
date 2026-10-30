@@ -1,5 +1,6 @@
 import base64
 import io
+from pathlib import Path
 from types import SimpleNamespace
 from threading import Lock
 
@@ -76,6 +77,7 @@ class ExtrasTestState:
 def setup_postprocessing_unit_test(monkeypatch, tmp_path, *, script_run, output_extension=None):
     opts = SimpleNamespace(
         enable_pnginfo=False,
+        list_hidden_files=False,
         outdir_extras_samples=str(tmp_path / "outputs"),
         outdir_samples="",
         postprocessing_existing_caption_action="Ignore",
@@ -96,6 +98,131 @@ def setup_postprocessing_unit_test(monkeypatch, tmp_path, *, script_run, output_
             output_extension=output_extension or (lambda args, default_extension: default_extension),
         ),
     )
+
+
+def install_test_image_saver(monkeypatch):
+    def save_image(image, path, basename, extension, forced_filename=None, suffix="", **kwargs):
+        filename = forced_filename or f"{basename}{suffix}"
+        output_file = Path(path) / f"{filename}.{extension}"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        image.save(output_file)
+        return str(output_file), None
+
+    monkeypatch.setattr(postprocessing.images, "save_image", save_image)
+
+
+def test_postprocessing_recursively_mirrors_directory_tree(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    sources = [
+        input_dir / "root.png",
+        input_dir / "people" / "portrait.png",
+        input_dir / "animals" / "portrait.png",
+    ]
+    for source in sources:
+        source.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1, 1), "red").save(source)
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=lambda pp, args: None)
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2, None, [], str(input_dir), str(output_dir), False, save_format="png"
+    )
+
+    assert sorted(path.relative_to(output_dir) for path in output_dir.rglob("*.png")) == [
+        Path("animals/portrait.png"),
+        Path("people/portrait.png"),
+        Path("root.png"),
+    ]
+    assert postprocessing.shared.state.job_count == 3
+
+
+def test_postprocessing_mirrors_tree_under_default_output_root(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    source = input_dir / "nested" / "source.png"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (1, 1), "red").save(source)
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=lambda pp, args: None)
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2, None, [], str(input_dir), "", False, save_format="png"
+    )
+
+    assert (tmp_path / "outputs" / "nested" / "source.png").is_file()
+
+
+def test_postprocessing_excludes_nested_output_directory(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = input_dir / "output"
+    source = input_dir / "source.png"
+    prior_output = output_dir / "prior.png"
+    output_dir.mkdir(parents=True)
+    Image.new("RGB", (1, 1), "red").save(source)
+    Image.new("RGB", (1, 1), "blue").save(prior_output)
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=lambda pp, args: None)
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2, None, [], str(input_dir), str(output_dir), False, save_format="png"
+    )
+
+    assert postprocessing.shared.state.job_count == 1
+    assert sorted(path.name for path in output_dir.glob("*.png")) == ["prior.png", "source.png"]
+
+
+def test_postprocessing_processes_nested_sources_when_input_equals_output(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    source = input_dir / "nested" / "source.png"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (1, 1), "red").save(source)
+
+    setup_postprocessing_unit_test(monkeypatch, tmp_path, script_run=lambda pp, args: None)
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2, None, [], str(input_dir), str(input_dir), False, save_format="png"
+    )
+
+    assert postprocessing.shared.state.job_count == 1
+    assert source.is_file()
+
+
+def test_postprocessing_skips_existing_output_in_mirrored_directory(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    source = input_dir / "nested" / "source.jpg"
+    existing_output = output_dir / "nested" / "source.png"
+    source.parent.mkdir(parents=True)
+    existing_output.parent.mkdir(parents=True)
+    Image.new("RGB", (1, 1), "red").save(source)
+    Image.new("RGB", (1, 1), "blue").save(existing_output)
+
+    script_calls = []
+    setup_postprocessing_unit_test(
+        monkeypatch,
+        tmp_path,
+        script_run=lambda pp, args: script_calls.append(pp),
+        output_extension=lambda args, default_extension: "png",
+    )
+    install_test_image_saver(monkeypatch)
+
+    postprocessing.run_postprocessing(
+        2,
+        None,
+        [],
+        str(input_dir),
+        str(output_dir),
+        False,
+        save_format="jpg",
+        skip_existing_files=True,
+    )
+
+    assert postprocessing.shared.state.job_count == 1
+    assert script_calls == []
 
 
 def test_postprocessing_skips_existing_batch_output_when_enabled(monkeypatch, tmp_path):

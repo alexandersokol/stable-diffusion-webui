@@ -13,12 +13,29 @@ def combine_original_and_postprocessing_info(original_info, postprocessing_info)
     return original_info or postprocessing_info
 
 
+def _is_strict_subpath(path: str, parent: str) -> bool:
+    canonical_path = os.path.normcase(os.path.realpath(path))
+    canonical_parent = os.path.normcase(os.path.realpath(parent))
+    if canonical_path == canonical_parent:
+        return False
+
+    try:
+        return os.path.commonpath((canonical_path, canonical_parent)) == canonical_parent
+    except ValueError:
+        return False
+
+
 def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True, save_format=None, jpeg_quality=None, skip_existing_files: bool = False):
     devices.torch_gc()
 
     shared.state.begin(job="extras")
 
     outputs = []
+
+    if extras_mode == 2 and output_dir != '':
+        outpath = output_dir
+    else:
+        outpath = opts.outdir_samples or opts.outdir_extras_samples
 
     def get_images(extras_mode, image, image_folder, input_dir):
         if extras_mode == 1:
@@ -29,22 +46,21 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
                 else:
                     image = images.read(os.path.abspath(img.name))
                     fn = os.path.splitext(img.orig_name)[0]
-                yield image, fn
+                yield image, fn, ''
         elif extras_mode == 2:
             assert not shared.cmd_opts.hide_ui_dir_config, '--hide-ui-dir-config option must be disabled'
             assert input_dir, 'input directory not selected'
 
-            image_list = shared.listfiles(input_dir)
+            excluded_paths = [outpath] if _is_strict_subpath(outpath, input_dir) else None
+            image_list = shared.walk_files(input_dir, excluded_paths=excluded_paths)
             for filename in image_list:
-                yield filename, filename
+                relative_parent = os.path.relpath(os.path.dirname(filename), input_dir)
+                if relative_parent == os.curdir:
+                    relative_parent = ''
+                yield filename, filename, relative_parent
         else:
             assert image, 'image not selected'
-            yield image, None
-
-    if extras_mode == 2 and output_dir != '':
-        outpath = output_dir
-    else:
-        outpath = opts.outdir_samples or opts.outdir_extras_samples
+            yield image, None, ''
 
     infotext = ''
 
@@ -53,14 +69,14 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
     requested_format = save_format or opts.samples_format
     output_format = scripts.scripts_postproc.output_extension(args, requested_format)
 
-    def output_exists(basename, suffix="", extension=None):
+    def output_exists(item_outpath, basename, suffix="", extension=None):
         if not skip_existing_files or not save_output or not basename:
             return False
 
         filename = f"{basename}{suffix}.{extension or output_format}"
-        return os.path.exists(os.path.join(outpath, filename))
+        return os.path.exists(os.path.join(item_outpath, filename))
 
-    for image_placeholder, name in data_to_process:
+    for image_placeholder, name, relative_parent in data_to_process:
         image_data: Image.Image
 
         shared.state.nextjob()
@@ -70,8 +86,9 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
         if shared.state.interrupted or shared.state.stopping_generation:
             break
 
+        item_outpath = os.path.join(outpath, relative_parent) if relative_parent else outpath
         basename = os.path.splitext(os.path.basename(name))[0] if opts.use_original_name_batch and name is not None else ''
-        if output_exists(basename):
+        if output_exists(item_outpath, basename):
             continue
 
         if isinstance(image_placeholder, str):
@@ -116,13 +133,13 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
             shared.state.assign_current_image(pp.image)
 
             if save_output:
-                if forced_filename is not None and output_exists(basename, suffix, pp_output_format):
+                if forced_filename is not None and output_exists(item_outpath, basename, suffix, pp_output_format):
                     continue
 
                 save_infotext = infotext if pp_output_format_lower == "png" else combine_original_and_postprocessing_info(parameters, infotext)
                 output_jpeg_quality = jpeg_quality if pp_output_format_lower in ("jpg", "jpeg") else None
 
-                fullfn, _ = images.save_image(pp.image, path=outpath, basename=basename, extension=pp_output_format, info=save_infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
+                fullfn, _ = images.save_image(pp.image, path=item_outpath, basename=basename, extension=pp_output_format, info=save_infotext, short_filename=True, no_prompt=True, grid=False, pnginfo_section_name="extras", existing_info=existing_pnginfo, forced_filename=forced_filename, suffix=suffix, jpeg_quality=output_jpeg_quality)
 
                 if pp.caption:
                     caption_filename = os.path.splitext(fullfn)[0] + ".txt"
