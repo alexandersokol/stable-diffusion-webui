@@ -41,6 +41,31 @@ def test_jpeg_save_can_use_per_save_quality_override(monkeypatch, tmp_path):
     assert recorded["quality"] == 90
 
 
+def test_jpeg_save_omits_exif_metadata_that_exceeds_app1_limit(monkeypatch, tmp_path, capsys):
+    filename = tmp_path / "image.jpg"
+    oversized_geninfo = "x" * 40000
+    monkeypatch.setattr(images, "opts", SimpleNamespace(enable_pnginfo=True, jpeg_quality=80, webp_lossless=False, png_compress_level=1))
+
+    images.save_image_with_geninfo(Image.new("RGB", (1, 1)), oversized_geninfo, str(filename))
+
+    with Image.open(filename) as saved_image:
+        assert saved_image.format == "JPEG"
+        assert "exif" not in saved_image.info
+    assert "Skipping EXIF metadata because it exceeds JPEG's 65533-byte limit" in capsys.readouterr().err
+
+
+def test_jpeg_save_preserves_exif_metadata_within_app1_limit(monkeypatch, tmp_path):
+    filename = tmp_path / "image.jpg"
+    geninfo = "a cat\nSteps: 20, Seed: 123"
+    monkeypatch.setattr(images, "opts", SimpleNamespace(enable_pnginfo=True, jpeg_quality=80, webp_lossless=False, png_compress_level=1))
+
+    images.save_image_with_geninfo(Image.new("RGB", (1, 1)), geninfo, str(filename))
+
+    with Image.open(filename) as saved_image:
+        saved_geninfo, _items = images.read_info_from_image(saved_image)
+    assert saved_geninfo == geninfo
+
+
 def test_save_image_forwards_per_save_quality_override(monkeypatch, tmp_path):
     recorded = {}
 

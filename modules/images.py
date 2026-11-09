@@ -26,6 +26,7 @@ from modules.paths_internal import roboto_ttf_file
 from modules.shared import opts
 
 LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+JPEG_EXIF_MAX_PAYLOAD_SIZE = 65533
 
 
 def get_font(fontsize: int):
@@ -669,7 +670,10 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
                 },
             })
 
-            piexif.insert(exif_bytes, filename)
+            if extension.lower() in (".jpg", ".jpeg") and len(exif_bytes) > JPEG_EXIF_MAX_PAYLOAD_SIZE:
+                errors.report(f"Skipping EXIF metadata because it exceeds JPEG's {JPEG_EXIF_MAX_PAYLOAD_SIZE}-byte limit: {filename}")
+            else:
+                piexif.insert(exif_bytes, filename)
     elif extension.lower() == '.avif':
         if opts.enable_pnginfo and geninfo is not None:
             exif_bytes = piexif.dump({
